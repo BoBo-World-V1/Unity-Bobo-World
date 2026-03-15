@@ -3,11 +3,6 @@ using UnityEngine.InputSystem;
 using UnityEngine.InputSystem.EnhancedTouch;
 using Touch = UnityEngine.InputSystem.EnhancedTouch.Touch;
 
-/// <summary>
-/// PlayerController — works on PC (WASD/Arrow keys), Gamepad, and Mobile (virtual joystick or touch).
-/// Requires: Unity New Input System package installed.
-/// Attach to your player GameObject alongside a Rigidbody2D.
-/// </summary>
 [RequireComponent(typeof(Rigidbody2D))]
 public class PlayerController : MonoBehaviour
 {
@@ -16,49 +11,57 @@ public class PlayerController : MonoBehaviour
 
     [Header("Jump Settings")]
     public float jumpForce = 10f;
-    private bool isGrounded = true; // Simple grounded check (you may want to improve this)
+    private bool isGrounded = true;
     private bool jumpRequested = false;
 
     [Header("Ground Check Settings")]
-    public Transform groundCheck; // Assign a child GameObject for ground checking
+    public Transform groundCheck;
     public float groundCheckRadius = 0.1f;
-    public LayerMask groundLayer; // Assign the ground layer in the Inspector
+    public LayerMask groundLayer;
 
-    [Header("Mobile Joystick (optional)")]
-    [Tooltip("Assign your on-screen joystick UI script here if using one.")]
-    // public FloatingJoystick mobileJoystick; // Optional — assign in Inspector if using a joystick asset
+    [Header("Animation")]
+    [SerializeField] private Animator animator;
 
     // ── internals ──────────────────────────────────────────────────────────────
     private Rigidbody2D rb;
     private Vector2 movement;
+    private Vector3 initialLocalScale;
 
-    // New Input System actions (auto-detected for keyboard + gamepad)
     private PlayerInput playerInput;
     private InputAction moveAction;
+    private InputAction jumpAction; // [OPT 1] cache jump action instead of looking it up every frame
 
-    // Mobile touch fallback (used only if no joystick asset is assigned)
     private bool isMobilePlatform;
     private Vector2 touchStartPos;
     private bool isTouching;
-    private const float touchDeadZone = 10f; // pixels
+    private const float touchDeadZone = 10f;
 
-    // ── Unity lifecycle ────────────────────────────────────────────────────────
+    // [OPT 2] Cache animator hash — string lookups every frame are slow
+    private static readonly int IsRunningHash = Animator.StringToHash("isRunning");
+    private static readonly int IsJumpHash = Animator.StringToHash("isJump");
+
+    // [OPT 3] Reuse a single velocity variable to avoid struct allocation each FixedUpdate
+    private Vector2 velocity;
 
     void Awake()
     {
         rb = GetComponent<Rigidbody2D>();
+        initialLocalScale = transform.localScale;
+        if (animator == null) animator = GetComponent<Animator>();
 
-        // Try to get PlayerInput component for New Input System
         playerInput = GetComponent<PlayerInput>();
-        if (playerInput != null) moveAction = playerInput.actions["Move"];
-        
+        if (playerInput != null)
+        {
+            moveAction = playerInput.actions["Move"];
+            jumpAction = playerInput.actions["Jump"]; // [OPT 1] cached here
+
+        }
 
         isMobilePlatform = Application.isMobilePlatform;
     }
 
     void OnEnable()
     {
-        // Enable enhanced touch support for mobile fallback
         if (isMobilePlatform) EnhancedTouchSupport.Enable();
     }
 
@@ -71,40 +74,41 @@ public class PlayerController : MonoBehaviour
     {
         movement = Vector2.zero;
 
-        // ── 1. New Input System (keyboard + gamepad) ───────────────────────────
         if (moveAction != null)
         {
             movement = moveAction.ReadValue<Vector2>();
-            if (playerInput.actions["Jump"].WasPressedThisFrame() && isGrounded) jumpRequested = true;
+            // [OPT 1] jumpAction cached — no dictionary lookup every frame
+            if (!jumpRequested && isGrounded && jumpAction != null && jumpAction.WasPressedThisFrame())
+            {
+                jumpRequested = true;
+                isGrounded = false;
+            }
         }
-        // ── 2. Legacy fallback (if no PlayerInput component on GameObject) ─────
         else
         {
             movement.x = Input.GetAxisRaw("Horizontal");
-            if (Input.GetButtonDown("Jump") && isGrounded) jumpRequested = true;
+            if (!jumpRequested && isGrounded && Input.GetButtonDown("Jump"))
+            {
+                jumpRequested = true;
+                isGrounded = false;
+            }
         }
 
-        // ── 3. Mobile: virtual joystick asset (highest priority on mobile) ─────
-        // if (isMobilePlatform && mobileJoystick != null)
-        // {
-        //     movement = mobileJoystick.Direction; // works with most joystick assets
-        // }
-        // // ── 4. Mobile: raw touch fallback (swipe direction) ───────────────────
-        // else if (isMobilePlatform && mobileJoystick == null)
-        // {
-        //     movement = ReadTouchInput();
-        // }
+        // [OPT 4] sqrMagnitude avoids a sqrt — sufficient for the > 1 check
+        if (movement.sqrMagnitude > 1f) movement.Normalize();
 
-        // Normalize so diagonal movement isn't faster
-        if (movement.magnitude > 1f)
-            movement.Normalize();
+        UpdateFacingDirection();
+        UpdateAnimation();
     }
 
     void FixedUpdate()
     {
         isGrounded = Physics2D.OverlapCircle(groundCheck.position, groundCheckRadius, groundLayer);
 
-        rb.linearVelocity = new Vector2(movement.x * moveSpeed, rb.linearVelocity.y);
+        // [OPT 3] Reuse cached velocity struct
+        velocity.x = movement.x * moveSpeed;
+        velocity.y = rb.linearVelocity.y;
+        rb.linearVelocity = velocity;
 
         if (jumpRequested)
         {
@@ -112,12 +116,25 @@ public class PlayerController : MonoBehaviour
             jumpRequested = false;
         }
     }
-    void OnCollisionEnter2D(Collision2D col)
+
+    void OnCollisionEnter2D(Collision2D col) {Debug.Log("Hit: " + col.gameObject.name);}
+
+    private void UpdateAnimation()
     {
-        Debug.Log("Hit: " + col.gameObject.name);
+        if (animator == null) return;
+
+        bool isInJumpState = jumpRequested || !isGrounded || rb.linearVelocity.y > 0.01f;
+        animator.SetBool(IsRunningHash, movement.x > 0.01f || movement.x < -0.01f);
+        animator.SetBool(IsJumpHash, isInJumpState);
     }
 
-    // ── Mobile touch input (fallback when no joystick asset) ──────────────────
+    private void UpdateFacingDirection()
+    {
+        if (movement.x > 0.01f)
+            transform.localScale = new Vector3(-Mathf.Abs(initialLocalScale.x), initialLocalScale.y, initialLocalScale.z);
+        else if (movement.x < -0.01f)
+            transform.localScale = new Vector3(Mathf.Abs(initialLocalScale.x), initialLocalScale.y, initialLocalScale.z);
+    }
 
     private Vector2 ReadTouchInput()
     {
@@ -139,24 +156,13 @@ public class PlayerController : MonoBehaviour
         if (!isTouching) return Vector2.zero;
 
         Vector2 delta = touch.screenPosition - touchStartPos;
-
-        if (delta.magnitude < touchDeadZone)
-            return Vector2.zero;
-
-        return delta.normalized;
+        return delta.sqrMagnitude < touchDeadZone * touchDeadZone ? Vector2.zero : delta.normalized; // [OPT 4]
     }
 
-    // ── Public API for custom mobile joystick UI ───────────────────────────────
-
-    /// <summary>
-    /// Call this from your own joystick UI script if not using FloatingJoystick.
-    /// Pass a normalized Vector2 (-1 to 1 on each axis).
-    /// </summary>
     public void SetMobileMovement(Vector2 input)
     {
         if (!isMobilePlatform) return;
         movement = input;
-        if (movement.magnitude > 1f)
-            movement.Normalize();
+        if (movement.sqrMagnitude > 1f) movement.Normalize();
     }
 }
