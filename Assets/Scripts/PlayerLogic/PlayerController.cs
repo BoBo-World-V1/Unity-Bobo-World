@@ -1,3 +1,26 @@
+// ──────────────────────────────────────────────────────────────────────────────
+// FUTURE REFACTOR NOTES — PlayerController.cs
+// ──────────────────────────────────────────────────────────────────────────────
+//
+// STEP 1 — Java Backend Integration
+//   - Movement should be sent to Java via PacketSender.cs every FixedUpdate
+//   - Java validates movement (speed hack prevention, collision server-side)
+//   - Other players positions come from PacketReceiver.cs not this script
+//
+// STEP 2 — Create OtherPlayerController.cs
+//   - This script is ONLY for the local player
+//   - Other players in the world use OtherPlayerController.cs
+//   - Driven purely by server data, no input reading
+//
+// STEP 3 — Mobile joystick
+//   - Uncomment and wire up FloatingJoystick when Joystick Pack is imported
+//   - Test on Android/iOS build, not just Unity editor
+//
+// STEP 4 — Player stats
+//   - Add health, level, and gem count synced from Java
+//   - Java is the source of truth for all player stats
+//
+// ──────────────────────────────────────────────────────────────────────────────
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.InputSystem.EnhancedTouch;
