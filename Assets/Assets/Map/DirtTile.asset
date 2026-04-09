@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 13312, guid: 0000000000000000e000000000000000, type: 0}
   m_Name: DirtTile
   m_EditorClassIdentifier: UnityEngine.dll::UnityEngine.Tilemaps.Tile
-  m_Sprite: {fileID: 5634026908348037240, guid: c290445f3f3e2a54ea8317040f3a0a8c, type: 3}
+  m_Sprite: {fileID: 5116365079405408103, guid: cbf10e0d4538aa84ba4feb03f70cbefe, type: 3}
   m_Color: {r: 1, g: 1, b: 1, a: 1}
   m_Transform:
     e00: 1

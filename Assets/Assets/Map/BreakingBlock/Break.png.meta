@@ -1,10 +1,16 @@
 fileFormatVersion: 2
-guid: cbf10e0d4538aa84ba4feb03f70cbefe
+guid: 0a61e52544c8b2443b7fd5ba8d9b8664
 TextureImporter:
   internalIDToNameTable:
   - first:
-      213: 5116365079405408103
-    second: Dirt (2)_0
+      213: -6426412849335849376
+    second: Break_0
+  - first:
+      213: 5504277486448943824
+    second: Break_1
+  - first:
+      213: 3847257389965480688
+    second: Break_2
   externalObjects: {}
   serializedVersion: 13
   mipmaps:
@@ -46,7 +52,7 @@ TextureImporter:
   nPOTScale: 0
   lightmap: 0
   compressionQuality: 50
-  spriteMode: 2
+  spriteMode: 1
   spriteExtrude: 1
   spriteMeshType: 1
   alignment: 0
@@ -100,13 +106,13 @@ TextureImporter:
     serializedVersion: 2
     sprites:
     - serializedVersion: 2
-      name: Dirt (2)_0
+      name: Break_0
       rect:
         serializedVersion: 2
-        x: 0
-        y: 0
-        width: 32
-        height: 32
+        x: 2
+        y: 3
+        width: 19
+        height: 29
       alignment: 0
       pivot: {x: 0, y: 0}
       border: {x: 0, y: 0, z: 0, w: 0}
@@ -115,8 +121,52 @@ TextureImporter:
       physicsShape: []
       tessellationDetail: -1
       bones: []
-      spriteID: 76f2c2b9eeaf00740800000000000000
-      internalID: 5116365079405408103
+      spriteID: 06ea457ef8bc0d6a0800000000000000
+      internalID: -6426412849335849376
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: Break_1
+      rect:
+        serializedVersion: 2
+        x: 21
+        y: 17
+        width: 10
+        height: 15
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 0d228f4063f136c40800000000000000
+      internalID: 5504277486448943824
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: Break_2
+      rect:
+        serializedVersion: 2
+        x: 20
+        y: 1
+        width: 8
+        height: 6
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 0f293686634346530800000000000000
+      internalID: 3847257389965480688
       vertices: []
       indices: 
       edges: []
@@ -125,7 +175,7 @@ TextureImporter:
     customData: 
     physicsShape: []
     bones: []
-    spriteID: 
+    spriteID: 5e97eb03825dee720800000000000000
     internalID: 0
     vertices: []
     indices: 
@@ -135,7 +185,9 @@ TextureImporter:
     spriteCustomMetadata:
       entries: []
     nameFileIdTable:
-      Dirt (2)_0: 5116365079405408103
+      Break_0: -6426412849335849376
+      Break_1: 5504277486448943824
+      Break_2: 3847257389965480688
   mipmapLimitGroupName: 
   pSDRemoveMatte: 0
   userData: 

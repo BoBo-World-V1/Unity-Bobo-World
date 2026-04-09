@@ -3,6 +3,8 @@ using UnityEngine.Tilemaps;
 
 public class DroppedBlock : MonoBehaviour
 {
+    private static readonly Vector3 DropScale = new Vector3(0.5f, 0.5f, 1f);
+
     [Header("Settings")]
     public float pickupRadius = 0.8f;       // How close player needs to be
     public float bobSpeed = 2f;             // Hover bob speed
@@ -23,8 +25,9 @@ public class DroppedBlock : MonoBehaviour
     private bool isAttracting;
     private SpriteRenderer sr;
 
-    public void Initialize(string name, TileBase tile, Sprite sprite, int count, Transform playerTransform, Inventory inv)
-    {
+    private void Awake(){ TryGetComponent(out sr); }
+
+    public void Initialize(string name, TileBase tile, Sprite sprite, int count, Transform playerTransform, Inventory inv){
         blockName = name;
         blockTile = tile;
         blockSprite = sprite;
@@ -33,28 +36,25 @@ public class DroppedBlock : MonoBehaviour
         inventory = inv;
 
         // Set sprite to block sprite
-        sr = GetComponent<SpriteRenderer>();
-        if (sr != null && blockSprite != null)
-            sr.sprite = blockSprite;
+        if (sr == null) TryGetComponent(out sr);
+
+        if (sr != null && blockSprite != null) sr.sprite = blockSprite;
 
         // Set drop size here
-        transform.localScale = new Vector3(0.5f, 0.5f, 1f);
+        transform.localScale = DropScale;
 
         startPosition = transform.position;
     }
 
-    private void Update()
-    {
+    private void Update(){
         if (player == null) return;
 
         float dist = Vector2.Distance(transform.position, player.position);
 
         // Start attracting when player is close enough
-        if (dist < attractRadius)
-            isAttracting = true;
+        if (dist < attractRadius) isAttracting = true;
 
-        if (isAttracting)
-        {
+        if (isAttracting){
             // Fly toward player
             transform.position = Vector3.MoveTowards(
                 transform.position,
@@ -63,28 +63,28 @@ public class DroppedBlock : MonoBehaviour
             );
 
             // Pickup when close enough
-            if (dist < pickupRadius)
-                Pickup();
+            if (dist < pickupRadius) Pickup();
         }
-        else
-        {
+        else{
             // Idle hover bob
             float newY = startPosition.y + Mathf.Sin(Time.time * bobSpeed) * bobAmplitude;
             transform.position = new Vector3(transform.position.x, newY, transform.position.z);
         }
     }
 
-    private void Pickup()
-    {
-        if (inventory.AddBlock(blockName, blockTile, blockSprite, amount))
-        {
+    private void Pickup(){
+        if (inventory == null){
+            Debug.LogWarning("DroppedBlock has no inventory reference.");
+            return;
+        }
+
+        if (inventory.AddBlock(blockName, blockTile, blockSprite, amount)){
             Debug.Log($"Picked up {blockName} x{amount}");
             Destroy(gameObject);
         }
     }
 
-    private void OnDrawGizmosSelected()
-    {
+    private void OnDrawGizmosSelected(){
         Gizmos.color = Color.cyan;
         Gizmos.DrawWireSphere(transform.position, pickupRadius);
         Gizmos.color = Color.yellow;
