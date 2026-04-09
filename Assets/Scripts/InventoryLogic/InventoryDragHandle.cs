@@ -8,51 +8,52 @@ public class InventoryDragHandle : MonoBehaviour, IPointerDownHandler, IDragHand
 
     [Header("Bounds")]
     public float minY = -136f;     // Lowest position (fully hidden, just handle visible)
-    public float maxY = -22;   // Highest position (fully open)
+    public float maxY = -22f;   // Highest position (fully open)
 
     private Vector2 dragOffset;
     private Canvas canvas;
+    private RectTransform canvasRect;
 
-    void Awake()
-    {
+    void Awake(){
         canvas = GetComponentInParent<Canvas>();
+        canvasRect = canvas != null ? canvas.transform as RectTransform : null;
 
         // Auto detect panel if not assigned
-        if (inventoryPanel == null)
+        if (inventoryPanel == null && transform.parent != null)
             inventoryPanel = transform.parent.GetComponent<RectTransform>();
     }
 
-    public void OnPointerDown(PointerEventData eventData)
-    {
+    public void OnPointerDown(PointerEventData eventData){
+        if (!TryGetLocalPointerPoint(eventData, out Vector2 localPoint)) return;
+
         // Calculate offset between panel position and click position
-        RectTransformUtility.ScreenPointToLocalPointInRectangle(
-            canvas.GetComponent<RectTransform>(),
-            eventData.position,
-            eventData.pressEventCamera,
-            out Vector2 localPoint
-        );
         dragOffset = inventoryPanel.anchoredPosition - localPoint;
     }
 
-    public void OnDrag(PointerEventData eventData)
-    {
-        RectTransformUtility.ScreenPointToLocalPointInRectangle(
-            canvas.GetComponent<RectTransform>(),
-            eventData.position,
-            eventData.pressEventCamera,
-            out Vector2 localPoint
-        );
+    public void OnDrag(PointerEventData eventData){
+        if (inventoryPanel == null) return;
+        if (!TryGetLocalPointerPoint(eventData, out Vector2 localPoint)) return;
 
         // Calculate new Y position
-        float newY = localPoint.y + dragOffset.y;
-
-        // Clamp between min and max
-        newY = Mathf.Clamp(newY, minY, maxY);
+        float newY = Mathf.Clamp(localPoint.y + dragOffset.y, minY, maxY);
 
         // Only move on Y axis
-        inventoryPanel.anchoredPosition = new Vector2(
-            inventoryPanel.anchoredPosition.x,
-            newY
+        Vector2 anchoredPosition = inventoryPanel.anchoredPosition;
+        anchoredPosition.y = newY;
+        inventoryPanel.anchoredPosition = anchoredPosition;
+    }
+
+    private bool TryGetLocalPointerPoint(PointerEventData eventData, out Vector2 localPoint){
+        if (canvasRect == null){
+            localPoint = default;
+            return false;
+        }
+
+        return RectTransformUtility.ScreenPointToLocalPointInRectangle(
+            canvasRect,
+            eventData.position,
+            eventData.pressEventCamera,
+            out localPoint
         );
     }
 }

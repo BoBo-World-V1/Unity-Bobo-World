@@ -32,16 +32,20 @@
 using UnityEngine;
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using UnityEngine.EventSystems;
+using UnityEngine.UI;
 
 public class WeaponSystem : MonoBehaviour
 {
+    private const float HoverWobbleDegrees = 15f;
+    private const float HoverScaleAmplitude = 0.1f;
+
     [SerializeField] private Transform Pivot;
     [SerializeField] private Transform FistSprite;
     public event EventHandler<AttackEventArgs> onAttack;
 
-    public class AttackEventArgs : EventArgs
-    {
+    public class AttackEventArgs : EventArgs{
         public Vector3 Origin { get; set; }
         public Vector3 TargetPosition { get; set; }
     }
@@ -83,25 +87,28 @@ public class WeaponSystem : MonoBehaviour
     private bool isHolding;
     private Vector3 idleLocalPosition;
 
-    private void Awake()
-    {
-        mainCamera = Camera.main;
+    private void Awake(){
+        CacheReferences();
         maxRangeSqr = maxRange * maxRange;
+        CaptureIdleState();
+        SetupTrail();
+    }
 
+    private void CacheReferences(){
+        mainCamera = Camera.main;
+    }
+
+    private void CaptureIdleState(){
         // Save wherever the fist is placed in Unity as the idle position
         idleLocalPosition = FistSprite.localPosition;
 
         FistSprite.localScale = Vector3.one;
         FistSprite.gameObject.SetActive(true);
-
-        SetupTrail();
     }
 
-    private void SetupTrail()
-    {
+    private void SetupTrail(){
         trail = FistSprite.GetComponent<TrailRenderer>();
-        if (trail == null)
-            trail = FistSprite.gameObject.AddComponent<TrailRenderer>();
+        if (trail == null) { trail = FistSprite.gameObject.AddComponent<TrailRenderer>(); }
 
         trail.time = trailTime;
         trail.startWidth = trailStartWidth;
@@ -124,83 +131,90 @@ public class WeaponSystem : MonoBehaviour
         trail.material = new Material(Shader.Find("Sprites/Default"));
     }
 
-    private void Update()
-    {
-         // Disable weapon system when block is selected
-        if (inventory != null && !inventory.IsFistSelected)
-        {
-            if (isHolding)
-            {
-                isHolding = false;
-                StopAttack();
-            }
+    private void Update(){
+        if (ShouldDisableForInventorySelection()){
+            StopCurrentAttackIfNeeded();
             ApplyHover();
-            return;  // skip all attack logic
-        }
-        Vector3 mouseWorld = Aim();
-
-        // Block attack if clicking on UI
-        if (IsPointerOverBlockingUI())
-        {
-            if (isHolding)
-            {
-                isHolding = false;
-                StopAttack();
-            }
-            if (!isHolding)
-                ApplyHover();
             return;
         }
 
-        if (Input.GetMouseButtonDown(0))
-        {
+        Vector3 mouseWorld = Aim();
+
+        if (IsPointerOverBlockingUI()){
+            StopCurrentAttackIfNeeded();
+            ApplyHover();
+            return;
+        }
+
+        HandleAttackInput(mouseWorld);
+
+        if (!isHolding) { ApplyHover(); }
+    }
+
+    private bool ShouldDisableForInventorySelection() { return inventory != null && !inventory.IsFistSelected; }
+
+    private void StopCurrentAttackIfNeeded(){
+        if (!isHolding) return;
+
+        isHolding = false;
+        StopAttack();
+    }
+
+    private void HandleAttackInput(Vector3 mouseWorld){
+        if (Input.GetMouseButtonDown(0)){
             isHolding = true;
             StopReturnCoroutine();
             StartAttack(mouseWorld);
         }
-        else if (Input.GetMouseButton(0) && isHolding)
-        {
-            // Only rotate pivot while attacking
-            Vector2 direction = mouseWorld - transform.position;
-            Pivot.rotation = Quaternion.Euler(0, 0,
-                Mathf.Atan2(direction.y, direction.x) * Mathf.Rad2Deg - 90f);
-
+        else if (Input.GetMouseButton(0) && isHolding){
             MoveToMouse(mouseWorld);
+            RotatePivotTowards(mouseWorld);
         }
-        else if (Input.GetMouseButtonUp(0) && isHolding)
-        {
+        else if (Input.GetMouseButtonUp(0) && isHolding){
             isHolding = false;
             StopAttack();
         }
-
-        // Idle hover — only when not holding
-        if (!isHolding)
-            ApplyHover();
     }
 
-    private bool IsPointerOverBlockingUI()
-    {
-        Vector2 screenPos = Application.isMobilePlatform && Input.touchCount > 0
-            ? (Vector2)Input.GetTouch(0).position
-            : (Vector2)Input.mousePosition;
+    private bool IsPointerOverBlockingUI(){
+        Vector2 screenPos = GetPointerScreenPosition();
 
-        if (inventoryPanel != null && RectTransformUtility.RectangleContainsScreenPoint(
-            inventoryPanel, screenPos, null))
-            return true;
+        if (joystickZone != null && RectTransformUtility.RectangleContainsScreenPoint(joystickZone, screenPos, null)) { return true; }
 
-        if (joystickZone != null && RectTransformUtility.RectangleContainsScreenPoint(
-            joystickZone, screenPos, null))
-            return true;
-        
-        if (HotBarRow != null && RectTransformUtility.RectangleContainsScreenPoint(
-            HotBarRow, screenPos, null))
-            return true;
+        if (HotBarRow != null && RectTransformUtility.RectangleContainsScreenPoint(HotBarRow, screenPos, null)) { return true;}
+
+        if (IsPointerOverInteractiveInventoryUI(screenPos)) { return true; }
 
         return false;
     }
 
-    private void ApplyHover()
-    {
+    private bool IsPointerOverInteractiveInventoryUI(Vector2 screenPos){
+        if (inventoryPanel == null || EventSystem.current == null) return false;
+
+        PointerEventData eventData = new PointerEventData(EventSystem.current){ position = screenPos };
+        List<RaycastResult> results = new List<RaycastResult>();
+        EventSystem.current.RaycastAll(eventData, results);
+
+        foreach (RaycastResult result in results){
+            GameObject hitObject = result.gameObject;
+            if (hitObject == null) continue;
+            if (!hitObject.transform.IsChildOf(inventoryPanel)) continue;
+
+            if (hitObject.GetComponentInParent<Selectable>() != null) return true;
+            if (hitObject.GetComponentInParent<InventoryDragHandle>() != null) return true;
+        }
+
+        return false;
+    }
+
+    private Vector2 GetPointerScreenPosition(){
+        if (Application.isMobilePlatform && Input.touchCount > 0)
+        { return Input.GetTouch(0).position; }
+
+        return Input.mousePosition;
+    }
+
+    private void ApplyHover(){
         Pivot.localRotation = Quaternion.identity;
 
         float sin = Mathf.Sin(Time.time * hoverSpeed); // reuse same sin wave
@@ -209,10 +223,10 @@ public class WeaponSystem : MonoBehaviour
         float hoverOffset = sin * hoverAmplitude;
 
         // Wobble rotation — rocks ±15 degrees
-        float wobble = sin * 15f;
+        float wobble = sin * HoverWobbleDegrees;
 
         // Breathe scale — pulses between 0.9 and 1.1
-        float breathe = 1f + Mathf.Sin(Time.time * hoverSpeed * 0.5f) * 0.1f;
+        float breathe = 1f + Mathf.Sin(Time.time * hoverSpeed * 0.5f) * HoverScaleAmplitude;
 
         FistSprite.localPosition = new Vector3(
             idleLocalPosition.x,
@@ -223,13 +237,8 @@ public class WeaponSystem : MonoBehaviour
         FistSprite.localScale = new Vector3(breathe, breathe, 1f);
     }
 
-    private void StartAttack(Vector3 mouseWorld)
-    {
-        // Rotate pivot to face mouse on first click
-        Vector2 direction = mouseWorld - transform.position;
-        Pivot.rotation = Quaternion.Euler(0, 0,
-            Mathf.Atan2(direction.y, direction.x) * Mathf.Rad2Deg - 90f);
-
+    private void StartAttack(Vector3 mouseWorld){
+        RotatePivotTowards(mouseWorld);
         MoveToMouse(mouseWorld);
 
         if (animCoroutine != null) StopCoroutine(animCoroutine);
@@ -241,26 +250,27 @@ public class WeaponSystem : MonoBehaviour
         });
     }
 
-    private void MoveToMouse(Vector3 mouseWorld)
-    {
+    private void MoveToMouse(Vector3 mouseWorld){
         Vector3 direction = mouseWorld - Pivot.position;
-        if (direction.sqrMagnitude > maxRangeSqr)
-            mouseWorld = Pivot.position + direction.normalized * maxRange;
+        if (direction.sqrMagnitude > maxRangeSqr){ mouseWorld = Pivot.position + direction.normalized * maxRange; }
 
         FistSprite.position = mouseWorld;
     }
 
-    private void StopAttack()
-    {
+    private void RotatePivotTowards(Vector3 targetWorld){
+        Vector2 direction = targetWorld - transform.position;
+        Pivot.rotation = Quaternion.Euler(0, 0,
+            Mathf.Atan2(direction.y, direction.x) * Mathf.Rad2Deg - 90f);
+    }
+
+    private void StopAttack(){
         if (animCoroutine != null) StopCoroutine(animCoroutine);
         animCoroutine = StartCoroutine(PopOut());
     }
 
-    private IEnumerator PopIn()
-    {
+    private IEnumerator PopIn(){
         float elapsed = 0f;
-        while (elapsed < popDuration)
-        {
+        while (elapsed < popDuration){
             elapsed += Time.deltaTime;
             float t = elapsed / popDuration;
             float scale = Mathf.Lerp(0f, maxScale, t);
@@ -270,13 +280,11 @@ public class WeaponSystem : MonoBehaviour
         FistSprite.localScale = new Vector3(maxScale, maxScale, 1f);
     }
 
-    private IEnumerator PopOut()
-    {
+    private IEnumerator PopOut(){
         // Shrink back to normal scale
         float elapsed = 0f;
         Vector3 startScale = FistSprite.localScale;
-        while (elapsed < shrinkDuration)
-        {
+        while (elapsed < shrinkDuration){
             elapsed += Time.deltaTime;
             float t = elapsed / shrinkDuration;
             float scale = Mathf.Lerp(startScale.x, 1f, t);
@@ -290,10 +298,8 @@ public class WeaponSystem : MonoBehaviour
         returnCoroutine = StartCoroutine(ReturnToIdle());
     }
 
-    private IEnumerator ReturnToIdle()
-    {
-        while (Vector3.Distance(FistSprite.localPosition, idleLocalPosition) > 0.01f)
-        {
+    private IEnumerator ReturnToIdle(){
+        while (Vector3.Distance(FistSprite.localPosition, idleLocalPosition) > 0.01f){
             FistSprite.localPosition = Vector3.Lerp(
                 FistSprite.localPosition,
                 idleLocalPosition,
@@ -304,17 +310,14 @@ public class WeaponSystem : MonoBehaviour
         FistSprite.localPosition = idleLocalPosition;
     }
 
-    private void StopReturnCoroutine()
-    {
-        if (returnCoroutine != null)
-        {
+    private void StopReturnCoroutine(){
+        if (returnCoroutine != null){
             StopCoroutine(returnCoroutine);
             returnCoroutine = null;
         }
     }
 
-    private Vector3 Aim()
-    {
+    private Vector3 Aim(){
         Vector3 vec = mainCamera.ScreenToWorldPoint(Input.mousePosition);
         return new Vector3(vec.x, vec.y, 0f);
     }

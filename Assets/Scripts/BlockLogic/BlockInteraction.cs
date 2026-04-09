@@ -28,10 +28,20 @@
 using UnityEngine;
 using UnityEngine.Tilemaps;
 using System.Collections.Generic;
+using UnityEngine.EventSystems;
+using UnityEngine.UI;
 
 public class BlockInteraction : MonoBehaviour
 {
     private const float HealSecondsPerCrackStage = 5f;
+
+    private struct CrackState
+    {
+        public float progress;
+        public float healTimer;
+        public int healStage;
+        public bool isBeingBroken;
+    }
 
     [Header("References")]
     public Tilemap groundTilemap;
@@ -59,15 +69,11 @@ public class BlockInteraction : MonoBehaviour
 
     // ── internals ──────────────────────────────────────────────────────────────
     private Camera mainCamera;
-
-    // Break state
-    private Vector3Int currentCell;
-    private Vector3Int lastCell;
-    private float breakProgress;
-    private bool isBreaking;
-    private float currentBreakTime;
-    private float crackHealTimer;
-    private int crackHealStage = -1;
+    private readonly Dictionary<Vector3Int, CrackState> crackStates = new Dictionary<Vector3Int, CrackState>();
+    private readonly Dictionary<Vector3Int, SpriteRenderer> crackVisuals = new Dictionary<Vector3Int, SpriteRenderer>();
+    private readonly List<RaycastResult> uiRaycastResults = new List<RaycastResult>();
+    private Vector3Int activeBreakCell;
+    private bool hasActiveBreakCell;
 
     // Place state
     private Vector3Int placeCell;
@@ -76,14 +82,16 @@ public class BlockInteraction : MonoBehaviour
     private void Awake(){
         mainCamera = Camera.main;
 
+        if (breakOverlay != null) breakOverlay.gameObject.SetActive(false);
+
         // Listen to weapon system attack events to trigger block interactions
-        if (weaponSystem != null) weaponSystem.onAttack += OnAttack;
+        if (weaponSystem != null) weaponSystem.onAttack += OnWeaponAttack;
     }
     private void OnDestroy(){
-        if (weaponSystem != null) weaponSystem.onAttack -= OnAttack;
+        if (weaponSystem != null) weaponSystem.onAttack -= OnWeaponAttack;
     }
 
-    private void OnAttack(object sender, WeaponSystem.AttackEventArgs e) {
+    private void OnWeaponAttack(object sender, WeaponSystem.AttackEventArgs e) {
         if (inventory != null && inventory.IsFistSelected) TryBreakBlock();
     }
 
@@ -117,32 +125,26 @@ public class BlockInteraction : MonoBehaviour
             return;
         }
 
-        currentCell = groundTilemap.WorldToCell(fistPos);
-
-        if (currentCell != lastCell){
-            ResetBreak(false);
-            lastCell = currentCell;
-        }
-
+        Vector3Int currentCell = groundTilemap.WorldToCell(fistPos);
         TileBase tile = groundTilemap.GetTile(currentCell);
         if (tile == null){
-            ResetBreak();
+            StopBreak();
             return;
         }
 
-        if (!isBreaking){
-            isBreaking = true;
-            currentBreakTime = GetBreakTime(tile);
-            crackHealTimer = 0f;
-            crackHealStage = -1;
-        }
+        SetActiveBreakCell(currentCell);
 
-        breakProgress += Time.deltaTime / currentBreakTime;
-        breakProgress = Mathf.Clamp01(breakProgress);
+        CrackState state = GetCrackState(currentCell);
+        float breakTime = GetBreakTime(tile);
+        state.isBeingBroken = true;
+        state.healTimer = 0f;
+        state.progress = Mathf.Clamp01(state.progress + Time.deltaTime / breakTime);
+        state.healStage = GetCurrentCrackStage(state.progress);
+        crackStates[currentCell] = state;
 
-        UpdateCrackOverlay(currentCell);
+        UpdateCrackOverlay(currentCell, state.progress);
 
-        if (breakProgress >= 1f) BreakBlock(currentCell, tile);
+        if (state.progress >= 1f) BreakBlock(currentCell, tile);
     }
 
     private void BreakBlock(Vector3Int cellPos, TileBase tile){
@@ -153,13 +155,19 @@ public class BlockInteraction : MonoBehaviour
         Sprite tileSprite = GetTileSprite(tile);
         BlockDropSpawner.Instance?.SpawnDrop(tile.name, tile, tileSprite, 1, worldPos);
 
-        ResetBreak();
+        RemoveCrackState(cellPos);
+        StopBreak();
     }
 
     // ── PLACING ───────────────────────────────────────────────────────────────
 
     private void TryPlaceBlock(){
         if (inventory == null || groundTilemap == null || mainCamera == null) return;
+
+        if (IsPointerOverBlockingUIForPlacement()){
+            ResetPlace();
+            return;
+        }
 
         // Get selected block from inventory
         InventorySlot selected = inventory.GetSelectedSlot();
@@ -210,82 +218,142 @@ public class BlockInteraction : MonoBehaviour
         return null;
     }
 
-    private void UpdateCrackOverlay(Vector3Int cellPos){
+    private void UpdateCrackOverlay(Vector3Int cellPos, float progress){
         if (breakOverlay == null || crackSprites == null || crackSprites.Length == 0) return;
 
-        breakOverlay.gameObject.SetActive(true);
-        breakOverlay.transform.position = groundTilemap.GetCellCenterWorld(cellPos);
+        SpriteRenderer visual = GetOrCreateCrackVisual(cellPos);
+        if (visual == null) return;
 
-        int stage = Mathf.FloorToInt(breakProgress * crackSprites.Length);
+        visual.gameObject.SetActive(true);
+        visual.transform.position = groundTilemap.GetCellCenterWorld(cellPos);
+
+        int stage = Mathf.FloorToInt(progress * crackSprites.Length);
         stage = Mathf.Clamp(stage, 0, crackSprites.Length - 1);
-        breakOverlay.sprite = crackSprites[stage];
+        visual.sprite = crackSprites[stage];
 
-        Color c = breakOverlay.color;
-        c.a = Mathf.Lerp(0.3f, 1f, breakProgress);
-        breakOverlay.color = c;
-    }
-
-    private void ResetBreak(bool clearCell = true){
-        isBreaking = false;
-        breakProgress = 0f;
-        currentBreakTime = 0f;
-        crackHealTimer = 0f;
-        crackHealStage = -1;
-
-        if (clearCell){
-            currentCell = Vector3Int.zero;
-            lastCell = Vector3Int.zero;
-        }
-
-        if (breakOverlay != null) breakOverlay.gameObject.SetActive(false);
+        Color c = visual.color;
+        c.a = Mathf.Lerp(0.3f, 1f, progress);
+        visual.color = c;
     }
 
     private void StopBreak(){
-        isBreaking = false;
-        currentBreakTime = 0f;
+        if (!hasActiveBreakCell) return;
+
+        if (crackStates.TryGetValue(activeBreakCell, out CrackState state)){
+            state.isBeingBroken = false;
+            crackStates[activeBreakCell] = state;
+        }
+
+        hasActiveBreakCell = false;
+    }
+
+    private CrackState GetCrackState(Vector3Int cellPos){
+        if (!crackStates.TryGetValue(cellPos, out CrackState state)){
+            state = new CrackState();
+        }
+
+        return state;
+    }
+
+    private SpriteRenderer GetOrCreateCrackVisual(Vector3Int cellPos){
+        if (crackVisuals.TryGetValue(cellPos, out SpriteRenderer visual) && visual != null){
+            return visual;
+        }
+
+        if (breakOverlay == null) return null;
+
+        SpriteRenderer newVisual = Instantiate(breakOverlay, breakOverlay.transform.parent);
+        newVisual.gameObject.name = $"CrackOverlay_{cellPos.x}_{cellPos.y}_{cellPos.z}";
+        newVisual.gameObject.SetActive(false);
+        crackVisuals[cellPos] = newVisual;
+        return newVisual;
+    }
+
+    private void SetActiveBreakCell(Vector3Int cellPos){
+        List<Vector3Int> keys = new List<Vector3Int>(crackStates.Keys);
+        foreach (Vector3Int key in keys){
+            CrackState state = crackStates[key];
+            state.isBeingBroken = false;
+            crackStates[key] = state;
+        }
+
+        CrackState activeState = GetCrackState(cellPos);
+        activeState.isBeingBroken = true;
+        crackStates[cellPos] = activeState;
+
+        activeBreakCell = cellPos;
+        hasActiveBreakCell = true;
+    }
+
+    private void RemoveCrackState(Vector3Int cellPos){
+        crackStates.Remove(cellPos);
+
+        if (crackVisuals.TryGetValue(cellPos, out SpriteRenderer visual) && visual != null){
+            Destroy(visual.gameObject);
+        }
+
+        crackVisuals.Remove(cellPos);
+
+        if (hasActiveBreakCell && activeBreakCell == cellPos){
+            hasActiveBreakCell = false;
+        }
     }
 
     private void UpdateBreakHealing(){
-        if (isBreaking || breakProgress <= 0f) return;
+        if (crackStates.Count == 0) return;
 
-        int stage = GetCurrentCrackStage();
-        if (stage < 0) return;
+        List<Vector3Int> cellsToRemove = null;
+        List<Vector3Int> cells = new List<Vector3Int>(crackStates.Keys);
 
-        if (stage != crackHealStage){
-            crackHealStage = stage;
-            crackHealTimer = 0f;
+        foreach (Vector3Int cellPos in cells){
+            CrackState state = crackStates[cellPos];
+
+            if (state.isBeingBroken || state.progress <= 0f) continue;
+
+            int stage = GetCurrentCrackStage(state.progress);
+            if (stage < 0) continue;
+
+            if (stage != state.healStage){
+                state.healStage = stage;
+                state.healTimer = 0f;
+            }
+
+            float healTime = GetHealTimeForCrackStage(stage);
+            if (healTime <= 0f) continue;
+
+            state.healTimer += Time.deltaTime;
+            if (state.healTimer < healTime){
+                crackStates[cellPos] = state;
+                continue;
+            }
+
+            state.healTimer = 0f;
+
+            int nextStage = stage - 1;
+            if (nextStage >= 0){
+                state.progress = GetProgressForCrackStage(nextStage);
+                state.healStage = nextStage;
+                crackStates[cellPos] = state;
+                UpdateCrackOverlay(cellPos, state.progress);
+                continue;
+            }
+
+            if (cellsToRemove == null) cellsToRemove = new List<Vector3Int>();
+            cellsToRemove.Add(cellPos);
         }
 
-        float healTime = GetHealTimeForCrackStage(stage);
-        if (healTime <= 0f) return;
+        if (cellsToRemove == null) return;
 
-        crackHealTimer += Time.deltaTime;
-        if (crackHealTimer < healTime) return;
-
-        crackHealTimer = 0f;
-
-        int nextStage = stage - 1;
-        if (nextStage >= 0){
-            breakProgress = GetProgressForCrackStage(nextStage);
-            crackHealStage = nextStage;
-            UpdateCrackOverlay(currentCell);
-            return;
+        foreach (Vector3Int cellPos in cellsToRemove){
+            RemoveCrackState(cellPos);
         }
-
-        breakProgress = 0f;
-        crackHealStage = -1;
-
-        if (breakOverlay != null) breakOverlay.gameObject.SetActive(false);
-
-        currentCell = Vector3Int.zero;
-        lastCell = Vector3Int.zero;
     }
 
-    private int GetCurrentCrackStage(){
+    private int GetCurrentCrackStage(float progress){
         int stageCount = GetCrackStageCount();
         if (stageCount <= 0) return -1;
 
-        int stage = Mathf.FloorToInt(breakProgress * stageCount);
+        int stage = Mathf.FloorToInt(progress * stageCount);
         return Mathf.Clamp(stage, 0, stageCount - 1);
     }
 
@@ -310,6 +378,55 @@ public class BlockInteraction : MonoBehaviour
             placeCell = Vector3Int.zero;
             lastPlaceCell = Vector3Int.zero;
         }
+    }
+
+    private bool IsPointerOverBlockingUIForPlacement(){
+        if (EventSystem.current == null) return false;
+
+        Vector2 screenPos = GetPointerScreenPosition();
+
+        if (IsPointerInsideInventoryRegions(screenPos)) return true;
+
+        PointerEventData eventData = new PointerEventData(EventSystem.current){ position = screenPos };
+        uiRaycastResults.Clear();
+        EventSystem.current.RaycastAll(eventData, uiRaycastResults);
+
+        foreach (RaycastResult result in uiRaycastResults){
+            GameObject hitObject = result.gameObject;
+            if (hitObject == null) continue;
+
+            if (hitObject.GetComponentInParent<Selectable>() != null) return true;
+            if (hitObject.GetComponentInParent<InventoryDragHandle>() != null) return true;
+        }
+
+        return false;
+    }
+
+    private bool IsPointerInsideInventoryRegions(Vector2 screenPos){
+        if (inventory == null) return false;
+
+        // Block placement over inventory layout regions even if decorative graphics don't raycast.
+        if (IsPointerInsideRect(inventory.hotbarParent, screenPos)) return true;
+        if (IsPointerInsideRect(inventory.mainGridParent, screenPos)) return true;
+
+        if (inventory.hotbarParent != null && IsPointerInsideRect(inventory.hotbarParent.parent, screenPos)) return true;
+        if (inventory.mainGridParent != null && IsPointerInsideRect(inventory.mainGridParent.parent, screenPos)) return true;
+
+        return false;
+    }
+
+    private Vector2 GetPointerScreenPosition(){
+        if (Input.touchCount > 0) return Input.GetTouch(0).position;
+        return Input.mousePosition;
+    }
+
+    private bool IsPointerInsideRect(Transform target, Vector2 screenPos){
+        if (target == null) return false;
+
+        RectTransform rect = target as RectTransform;
+        if (rect == null) return false;
+
+        return RectTransformUtility.RectangleContainsScreenPoint(rect, screenPos, null);
     }
 
     private float GetBreakTime(TileBase tile){
