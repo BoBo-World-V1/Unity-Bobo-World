@@ -40,9 +40,10 @@ public class InventoryUISlot : MonoBehaviour
 
     public void UpdateSlot(InventorySlot slot)
     {
-        if (slot != null && slot.count > 0){
-            SetIcon(slot.icon);
-            SetCount(isFistSlot ? string.Empty : slot.count.ToString(), !isFistSlot);
+        if (slot != null && !slot.IsEmpty){
+            SetIcon(slot.Icon);
+            bool showCount = !isFistSlot && slot.CanStack;
+            SetCount(showCount ? slot.count.ToString() : string.Empty, showCount);
             return;
         }
 

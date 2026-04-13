@@ -106,7 +106,7 @@ public class WeaponSystem : MonoBehaviour
 
     private bool CanProcessWeaponLogic()
     {
-        return inventory == null || inventory.IsFistSelected;
+        return inventory == null || inventory.CanUseSelectedItemAsWeapon;
     }
 
     private void CaptureIdleState()

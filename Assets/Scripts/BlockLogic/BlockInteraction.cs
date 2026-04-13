@@ -75,13 +75,18 @@ public class BlockInteraction : MonoBehaviour
             return;
         }
 
-        if (inventory != null && inventory.IsFistSelected){
+        if (inventory == null || inventory.CanUseSelectedItemForBreaking){
             TryBreakBlock();
             return;
         }
 
+        if (inventory.IsSelectedPlaceableBlock){
+            StopBreak();
+            TryPlaceBlock();
+            return;
+        }
+
         StopBreak();
-        TryPlaceBlock();
     }
 
     private void TryBreakBlock()
@@ -140,7 +145,7 @@ public class BlockInteraction : MonoBehaviour
         }
 
         InventorySlot selected = inventory.GetSelectedSlot();
-        if (selected == null || selected.count <= 0 || selected.blockTile == null){
+        if (selected == null || selected.IsEmpty || selected.PlacementTile == null){
             return;
         }
 
@@ -163,8 +168,8 @@ public class BlockInteraction : MonoBehaviour
 
     private void PlaceBlock(Vector3Int cellPos, InventorySlot slot)
     {
-        TileBase blockTile = slot.blockTile;
-        string blockName = slot.blockName;
+        TileBase blockTile = slot.PlacementTile;
+        string blockName = slot.DisplayName;
         int slotIndex = inventory.selectedSlot;
         if (!inventory.RemoveBlock(slotIndex, 1)){
             return;
@@ -443,11 +448,34 @@ public class BlockInteraction : MonoBehaviour
 
     private float GetBreakTime(TileBase tile)
     {
-        if (tile != null && hardnessTable.TryGetValue(tile.name, out float breakTime)){
-            return Mathf.Max(MinimumBreakTime, breakTime);
+        if (tile != null){
+            BlockItemDefinition blockDefinition = RuntimeItemCatalog.GetOrCreateBlock(
+                tile.name,
+                tile,
+                GetTileSprite(tile),
+                ResolveBaseBreakTime(tile.name));
+            if (blockDefinition != null){
+                float breakSpeedMultiplierFromInventory = inventory != null ? inventory.SelectedBreakSpeedMultiplier : 1f;
+                return Mathf.Max(MinimumBreakTime, blockDefinition.BreakTime / Mathf.Max(1f, breakSpeedMultiplierFromInventory));
+            }
         }
 
-        return Mathf.Max(MinimumBreakTime, defaultBreakTime);
+        float baseBreakTime = defaultBreakTime;
+        if (tile != null && hardnessTable.TryGetValue(tile.name, out float breakTime)){
+            baseBreakTime = breakTime;
+        }
+
+        float breakSpeedMultiplier = inventory != null ? inventory.SelectedBreakSpeedMultiplier : 1f;
+        return Mathf.Max(MinimumBreakTime, baseBreakTime / Mathf.Max(1f, breakSpeedMultiplier));
+    }
+
+    private float ResolveBaseBreakTime(string blockName)
+    {
+        if (!string.IsNullOrWhiteSpace(blockName) && hardnessTable.TryGetValue(blockName, out float breakTime)){
+            return breakTime;
+        }
+
+        return defaultBreakTime;
     }
 
     private void CachePlayerColliders()
