@@ -130,6 +130,7 @@ public class BlockInteraction : MonoBehaviour
         Sprite tileSprite = GetTileSprite(tile);
 
         groundTilemap.SetTile(cellPos, null);
+        GameAudio.PlayBlockBreak();
         Debug.Log($"Broke {tile.name} at {cellPos}");
 
         BlockDropSpawner.Instance?.SpawnDrop(tile.name, tile, tileSprite, 1, worldPos);
@@ -176,6 +177,7 @@ public class BlockInteraction : MonoBehaviour
         }
 
         groundTilemap.SetTile(cellPos, blockTile);
+        GameAudio.PlayBlockPlace();
         Debug.Log($"Placed {blockName} at {cellPos}");
     }
 

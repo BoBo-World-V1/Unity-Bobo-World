@@ -88,6 +88,7 @@ public class DroppedBlock : MonoBehaviour
         }
 
         if (inventory.AddBlock(blockName, blockTile, blockSprite, amount)){
+            GameAudio.PlayPickup();
             Debug.Log($"Picked up {blockName} x{amount}");
             Destroy(gameObject);
         }

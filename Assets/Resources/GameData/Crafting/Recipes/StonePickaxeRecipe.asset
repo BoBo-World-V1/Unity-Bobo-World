@@ -17,5 +17,7 @@ MonoBehaviour:
   output: {fileID: 11400000, guid: 22d8073355dc46a3b5df1e81d5dd2dcf, type: 2}
   outputCount: 1
   ingredients:
+  - itemId: block.stonetile
+    amount: 2
   - itemId: block.dirttile
-    amount: 10
+    amount: 5

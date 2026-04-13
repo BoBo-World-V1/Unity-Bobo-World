@@ -258,6 +258,7 @@ public class WeaponSystem : MonoBehaviour
         }
 
         animCoroutine = StartCoroutine(PopIn());
+        GameAudio.PlaySwing();
         onAttack?.Invoke(this, new AttackEventArgs
         {
             Origin = Pivot.position,

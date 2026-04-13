@@ -89,7 +89,7 @@ public class Inventory : MonoBehaviour
             itemRegistry = ItemRegistry.LoadDefault();
         }
 
-        RuntimeItemCatalog.Configure(itemRegistry, fistIcon, GetStonePickaxeIcon());
+        RuntimeItemCatalog.Configure(itemRegistry, fistIcon, stonePickaxeIcon);
     }
 
     private void HandleHotbarInput()
@@ -500,11 +500,6 @@ public class Inventory : MonoBehaviour
         };
     }
 
-    private Sprite GetStonePickaxeIcon()
-    {
-        return stonePickaxeIcon != null ? stonePickaxeIcon : GeneratedItemIcons.GetStonePickaxeIcon();
-    }
-
     private void OnDropClicked()
     {
         if (selectedSlot == 0){
@@ -553,7 +548,7 @@ public class Inventory : MonoBehaviour
 
         CraftingRecipeDefinition recipe = RuntimeItemCatalog.GetOrCreateStonePickaxeRecipe(
             dirtItem,
-            GetStonePickaxeIcon(),
+            stonePickaxeIcon,
             StonePickaxeCraftCost,
             StonePickaxeBreakMultiplier);
 
@@ -563,6 +558,7 @@ public class Inventory : MonoBehaviour
         }
 
         SelectSlot(craftedSlotIndex);
+        GameAudio.PlayCraft();
         Debug.Log($"Crafted {recipe.DisplayName}.");
     }
 

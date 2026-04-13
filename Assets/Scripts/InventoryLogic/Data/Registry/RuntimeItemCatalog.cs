@@ -18,7 +18,6 @@ public static class RuntimeItemCatalog
         itemRegistry = registry;
         if (itemRegistry != null){
             itemRegistry.RebuildCaches();
-            itemRegistry.ApplyRuntimeDefaults(fistIcon, stonePickaxeIcon);
         }
     }
 
@@ -40,7 +39,6 @@ public static class RuntimeItemCatalog
     {
         ItemRegistry registry = GetRegistry();
         if (registry != null && registry.TryGetItem(FistItemId, out ItemDefinition registeredItem) && registeredItem is FistItemDefinition registeredFist){
-            registeredFist.UpdateIcon(icon);
             return registeredFist;
         }
 
@@ -64,14 +62,10 @@ public static class RuntimeItemCatalog
         ItemRegistry registry = GetRegistry();
         if (registry != null){
             if (tile != null && registry.TryGetBlockByTile(tile, out BlockItemDefinition blockByTile)){
-                blockByTile.UpdateIcon(icon);
-                blockByTile.UpdateTile(tile, breakTime);
                 return blockByTile;
             }
 
             if (registry.TryGetItem(itemId, out ItemDefinition registeredItem) && registeredItem is BlockItemDefinition registeredBlock){
-                registeredBlock.UpdateIcon(icon);
-                registeredBlock.UpdateTile(tile, breakTime);
                 return registeredBlock;
             }
         }
@@ -119,7 +113,6 @@ public static class RuntimeItemCatalog
     {
         ItemRegistry registry = GetRegistry();
         if (registry != null && registry.TryGetItem(StonePickaxeItemId, out ItemDefinition registeredItem) && registeredItem is ToolItemDefinition registeredTool){
-            registeredTool.UpdateIcon(icon);
             return registeredTool;
         }
 

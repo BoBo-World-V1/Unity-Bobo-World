@@ -37,6 +37,7 @@ public class PlayerController : MonoBehaviour
     private bool jumpRequested;
     private bool mobileJumpRequested;
     private bool useMobileMovementInput;
+    private bool hasGroundedState;
 
     private void Awake()
     {
@@ -55,7 +56,13 @@ public class PlayerController : MonoBehaviour
 
     private void FixedUpdate()
     {
+        bool wasGrounded = isGrounded;
         UpdateGroundedState();
+        if (hasGroundedState && !wasGrounded && isGrounded){
+            GameAudio.PlayLand();
+        }
+
+        hasGroundedState = true;
         ApplyHorizontalVelocity();
         ApplyJumpIfRequested();
     }
@@ -152,6 +159,7 @@ public class PlayerController : MonoBehaviour
 
         rb.AddForce(Vector2.up * jumpForce, ForceMode2D.Impulse);
         jumpRequested = false;
+        GameAudio.PlayJump();
     }
 
     private void UpdateAnimation()
