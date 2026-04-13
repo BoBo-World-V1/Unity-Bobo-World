@@ -1,39 +1,13 @@
-// ──────────────────────────────────────────────────────────────────────────────
-// FUTURE REFACTOR NOTES — BlockInteraction.cs
-// ──────────────────────────────────────────────────────────────────────────────
-//
-// STEP 1 — Create BlockData.cs (ScriptableObject)
-//   - Move hardnessTable data out of this script
-//   - Each block gets its own BlockData asset in the project
-//   - Fields: breakTime, dropItem, dropAmount, crackSprites, breakSound
-//
-// STEP 2 — Create BlockRegistry.cs
-//   - A lookup table that maps TileBase → BlockData
-//   - Replace hardnessTable dictionary with BlockRegistry.GetBlockData(tile)
-//   - Lives on a manager GameObject in the scene
-//
-// STEP 3 — Java Backend Integration
-//   - BlockInteraction should NOT directly call groundTilemap.SetTile(cellPos, null)
-//   - Instead: send a break request to Java via PacketSender.cs
-//   - Java validates the break (ownership, permissions, range check server-side)
-//   - Java sends back confirmation → only then remove tile from tilemap
-//   - This prevents cheating and keeps world state in sync across all players
-//
-// STEP 4 — Multiplayer sync
-//   - Other players breaking blocks comes through PacketReceiver.cs
-//   - PacketReceiver calls a public method here like ApplyBlockBreak(cellPos)
-//   - Show crack overlay progress for other players breaking blocks too
-//
-// ──────────────────────────────────────────────────────────────────────────────
-using UnityEngine;
-using UnityEngine.Tilemaps;
 using System.Collections.Generic;
+using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.Tilemaps;
 using UnityEngine.UI;
 
 public class BlockInteraction : MonoBehaviour
 {
     private const float HealSecondsPerCrackStage = 5f;
+    private const float MinimumBreakTime = 0.05f;
 
     private struct CrackState
     {
@@ -46,86 +20,83 @@ public class BlockInteraction : MonoBehaviour
     [Header("References")]
     public Tilemap groundTilemap;
     public Transform fistTransform;
-    public Inventory inventory;          // Drag Player inventory here
-    public WeaponSystem weaponSystem;        // Drag Player WeaponSystem here
+    public Inventory inventory;
+    public WeaponSystem weaponSystem;
 
     [Header("Settings")]
     public float reachDistance = 3f;
     public float defaultBreakTime = 0.5f;
-    public float placeHoldTime = 0.3f;   // How long to hold to place
-
     [Header("Break Progress Visual")]
     public SpriteRenderer breakOverlay;
     public Sprite[] crackSprites;
 
-    // Hardness table
-    private Dictionary<string, float> hardnessTable = new Dictionary<string, float>()
+    private readonly Dictionary<string, float> hardnessTable = new()
     {
         { "DirtTile", 0.5f },
-        // { "StoneTile", 1.5f },
-        // { "WoodTile",  0.8f },
-        // { "LavaTile",  3.0f },
     };
 
-    // ── internals ──────────────────────────────────────────────────────────────
+    private readonly Dictionary<Vector3Int, CrackState> crackStates = new();
+    private readonly Dictionary<Vector3Int, SpriteRenderer> crackVisuals = new();
+    private readonly List<RaycastResult> uiRaycastResults = new();
+    private readonly List<Vector3Int> crackCellBuffer = new();
+    private readonly List<Vector3Int> removalBuffer = new();
+    private readonly List<Collider2D> playerColliders = new();
+
     private Camera mainCamera;
-    private readonly Dictionary<Vector3Int, CrackState> crackStates = new Dictionary<Vector3Int, CrackState>();
-    private readonly Dictionary<Vector3Int, SpriteRenderer> crackVisuals = new Dictionary<Vector3Int, SpriteRenderer>();
-    private readonly List<RaycastResult> uiRaycastResults = new List<RaycastResult>();
     private Vector3Int activeBreakCell;
     private bool hasActiveBreakCell;
-
-    // Place state
-    private Vector3Int placeCell;
-    private Vector3Int lastPlaceCell;
-
-    private void Awake(){
+    private void Awake()
+    {
         mainCamera = Camera.main;
+        CachePlayerColliders();
 
-        if (breakOverlay != null) breakOverlay.gameObject.SetActive(false);
-
-        // Listen to weapon system attack events to trigger block interactions
-        if (weaponSystem != null) weaponSystem.onAttack += OnWeaponAttack;
-    }
-    private void OnDestroy(){
-        if (weaponSystem != null) weaponSystem.onAttack -= OnWeaponAttack;
-    }
-
-    private void OnWeaponAttack(object sender, WeaponSystem.AttackEventArgs e) {
-        if (inventory != null && inventory.IsFistSelected) TryBreakBlock();
-    }
-
-    private void Update(){
-        // Left click — fist selected = break, block selected = place
-        if (Input.GetMouseButton(0)){
-            if (inventory != null && inventory.IsFistSelected) TryBreakBlock();
-            else TryPlaceBlock();
+        if (breakOverlay != null){
+            breakOverlay.gameObject.SetActive(false);
         }
+    }
 
-        if (Input.GetMouseButtonUp(0)){
-            StopBreak();
-            ResetPlace();
-        }
-
+    private void Update()
+    {
+        HandlePrimaryInteraction();
         UpdateBreakHealing();
     }
 
-    // ── BREAKING ──────────────────────────────────────────────────────────────
+    private void HandlePrimaryInteraction()
+    {
+        if (!Input.GetMouseButton(0)){
+            if (Input.GetMouseButtonUp(0)){
+                StopBreak();
+            }
+            return;
+        }
 
-    private void TryBreakBlock(){
-        if (groundTilemap == null) return;
-
-        // Always use fist world position — it's already been set by WeaponSystem
-        if (fistTransform == null) return;
-        Vector3 fistPos = fistTransform.position;
-
-        float dist = Vector2.Distance(transform.position, fistPos);
-        if (dist > reachDistance){
+        if (IsPointerOverBlockingUI()){
             StopBreak();
             return;
         }
 
-        Vector3Int currentCell = groundTilemap.WorldToCell(fistPos);
+        if (inventory != null && inventory.IsFistSelected){
+            TryBreakBlock();
+            return;
+        }
+
+        StopBreak();
+        TryPlaceBlock();
+    }
+
+    private void TryBreakBlock()
+    {
+        if (groundTilemap == null || fistTransform == null){
+            return;
+        }
+
+        Vector3 fistPosition = fistTransform.position;
+        if (!IsWithinReach(fistPosition)){
+            StopBreak();
+            return;
+        }
+
+        Vector3Int currentCell = groundTilemap.WorldToCell(fistPosition);
         TileBase tile = groundTilemap.GetTile(currentCell);
         if (tile == null){
             StopBreak();
@@ -135,109 +106,118 @@ public class BlockInteraction : MonoBehaviour
         SetActiveBreakCell(currentCell);
 
         CrackState state = GetCrackState(currentCell);
-        float breakTime = GetBreakTime(tile);
         state.isBeingBroken = true;
         state.healTimer = 0f;
-        state.progress = Mathf.Clamp01(state.progress + Time.deltaTime / breakTime);
+        state.progress = Mathf.Clamp01(state.progress + Time.deltaTime / GetBreakTime(tile));
         state.healStage = GetCurrentCrackStage(state.progress);
         crackStates[currentCell] = state;
 
         UpdateCrackOverlay(currentCell, state.progress);
 
-        if (state.progress >= 1f) BreakBlock(currentCell, tile);
+        if (state.progress >= 1f){
+            BreakBlock(currentCell, tile);
+        }
     }
 
-    private void BreakBlock(Vector3Int cellPos, TileBase tile){
+    private void BreakBlock(Vector3Int cellPos, TileBase tile)
+    {
         Vector3 worldPos = groundTilemap.GetCellCenterWorld(cellPos);
+        Sprite tileSprite = GetTileSprite(tile);
+
         groundTilemap.SetTile(cellPos, null);
         Debug.Log($"Broke {tile.name} at {cellPos}");
 
-        Sprite tileSprite = GetTileSprite(tile);
         BlockDropSpawner.Instance?.SpawnDrop(tile.name, tile, tileSprite, 1, worldPos);
 
         RemoveCrackState(cellPos);
         StopBreak();
     }
 
-    // ── PLACING ───────────────────────────────────────────────────────────────
-
-    private void TryPlaceBlock(){
-        if (inventory == null || groundTilemap == null || mainCamera == null) return;
-
-        if (IsPointerOverBlockingUIForPlacement()){
-            ResetPlace();
+    private void TryPlaceBlock()
+    {
+        if (inventory == null || groundTilemap == null || mainCamera == null){
             return;
         }
 
-        // Get selected block from inventory
         InventorySlot selected = inventory.GetSelectedSlot();
-        if (selected == null || selected.count <= 0 || selected.blockTile == null) return;
-
-        // Get mouse world position
-        Vector3 mousePos = mainCamera.ScreenToWorldPoint(Input.mousePosition);
-        mousePos.z = 0f;
-
-        // Range check
-        float dist = Vector2.Distance(transform.position, mousePos);
-        if (dist > reachDistance){
-            ResetPlace();
+        if (selected == null || selected.count <= 0 || selected.blockTile == null){
             return;
         }
 
-        placeCell = groundTilemap.WorldToCell(mousePos);
-
-        // Reset progress if moved to different cell
-        if (placeCell != lastPlaceCell){
-            ResetPlace(false);
-            lastPlaceCell = placeCell;
-        }
-
-        // Check cell is empty
-        if (groundTilemap.GetTile(placeCell) != null){
-            ResetPlace();
+        Vector3 pointerWorld = GetPointerWorldPosition();
+        if (!IsWithinReach(pointerWorld)){
             return;
         }
 
-        PlaceBlock(placeCell, selected);
+        Vector3Int currentCell = groundTilemap.WorldToCell(pointerWorld);
+        if (groundTilemap.GetTile(currentCell) != null){
+            return;
+        }
+
+        if (WouldPlaceInsidePlayer(currentCell)){
+            return;
+        }
+
+        PlaceBlock(currentCell, selected);
     }
 
-    private void PlaceBlock(Vector3Int cellPos, InventorySlot slot){
-        groundTilemap.SetTile(cellPos, slot.blockTile);
-        Debug.Log($"Placed {slot.blockName} at {cellPos}");
+    private void PlaceBlock(Vector3Int cellPos, InventorySlot slot)
+    {
+        TileBase blockTile = slot.blockTile;
+        string blockName = slot.blockName;
+        int slotIndex = inventory.selectedSlot;
+        if (!inventory.RemoveBlock(slotIndex, 1)){
+            return;
+        }
 
-        // Remove 1 from inventory
-        inventory.RemoveBlock(inventory.selectedSlot, 1);
-
-        ResetPlace();
+        groundTilemap.SetTile(cellPos, blockTile);
+        Debug.Log($"Placed {blockName} at {cellPos}");
     }
 
-    // ── HELPERS ───────────────────────────────────────────────────────────────
-
-    private Sprite GetTileSprite(TileBase tile){
-        if (tile is Tile t) return t.sprite;
-        return null;
+    private bool IsWithinReach(Vector3 worldPosition)
+    {
+        return Vector2.Distance(transform.position, worldPosition) <= reachDistance;
     }
 
-    private void UpdateCrackOverlay(Vector3Int cellPos, float progress){
-        if (breakOverlay == null || crackSprites == null || crackSprites.Length == 0) return;
+    private Vector3 GetPointerWorldPosition()
+    {
+        Vector3 pointerWorld = mainCamera.ScreenToWorldPoint(GetPointerScreenPosition());
+        pointerWorld.z = 0f;
+        return pointerWorld;
+    }
+
+    private Sprite GetTileSprite(TileBase tile)
+    {
+        return tile is Tile concreteTile ? concreteTile.sprite : null;
+    }
+
+    private void UpdateCrackOverlay(Vector3Int cellPos, float progress)
+    {
+        if (breakOverlay == null || crackSprites == null || crackSprites.Length == 0){
+            return;
+        }
 
         SpriteRenderer visual = GetOrCreateCrackVisual(cellPos);
-        if (visual == null) return;
+        if (visual == null){
+            return;
+        }
 
         visual.gameObject.SetActive(true);
         visual.transform.position = groundTilemap.GetCellCenterWorld(cellPos);
 
-        int stage = Mathf.FloorToInt(progress * crackSprites.Length);
-        stage = Mathf.Clamp(stage, 0, crackSprites.Length - 1);
+        int stage = Mathf.Clamp(Mathf.FloorToInt(progress * crackSprites.Length), 0, crackSprites.Length - 1);
         visual.sprite = crackSprites[stage];
 
-        Color c = visual.color;
-        c.a = Mathf.Lerp(0.3f, 1f, progress);
-        visual.color = c;
+        Color color = visual.color;
+        color.a = Mathf.Lerp(0.3f, 1f, progress);
+        visual.color = color;
     }
 
-    private void StopBreak(){
-        if (!hasActiveBreakCell) return;
+    private void StopBreak()
+    {
+        if (!hasActiveBreakCell){
+            return;
+        }
 
         if (crackStates.TryGetValue(activeBreakCell, out CrackState state)){
             state.isBeingBroken = false;
@@ -247,20 +227,20 @@ public class BlockInteraction : MonoBehaviour
         hasActiveBreakCell = false;
     }
 
-    private CrackState GetCrackState(Vector3Int cellPos){
-        if (!crackStates.TryGetValue(cellPos, out CrackState state)){
-            state = new CrackState();
-        }
-
-        return state;
+    private CrackState GetCrackState(Vector3Int cellPos)
+    {
+        return crackStates.TryGetValue(cellPos, out CrackState state) ? state : new CrackState();
     }
 
-    private SpriteRenderer GetOrCreateCrackVisual(Vector3Int cellPos){
-        if (crackVisuals.TryGetValue(cellPos, out SpriteRenderer visual) && visual != null){
-            return visual;
+    private SpriteRenderer GetOrCreateCrackVisual(Vector3Int cellPos)
+    {
+        if (crackVisuals.TryGetValue(cellPos, out SpriteRenderer existingVisual) && existingVisual != null){
+            return existingVisual;
         }
 
-        if (breakOverlay == null) return null;
+        if (breakOverlay == null){
+            return null;
+        }
 
         SpriteRenderer newVisual = Instantiate(breakOverlay, breakOverlay.transform.parent);
         newVisual.gameObject.name = $"CrackOverlay_{cellPos.x}_{cellPos.y}_{cellPos.z}";
@@ -269,9 +249,14 @@ public class BlockInteraction : MonoBehaviour
         return newVisual;
     }
 
-    private void SetActiveBreakCell(Vector3Int cellPos){
-        List<Vector3Int> keys = new List<Vector3Int>(crackStates.Keys);
-        foreach (Vector3Int key in keys){
+    private void SetActiveBreakCell(Vector3Int cellPos)
+    {
+        crackCellBuffer.Clear();
+        foreach (Vector3Int key in crackStates.Keys){
+            crackCellBuffer.Add(key);
+        }
+
+        foreach (Vector3Int key in crackCellBuffer){
             CrackState state = crackStates[key];
             state.isBeingBroken = false;
             crackStates[key] = state;
@@ -285,7 +270,8 @@ public class BlockInteraction : MonoBehaviour
         hasActiveBreakCell = true;
     }
 
-    private void RemoveCrackState(Vector3Int cellPos){
+    private void RemoveCrackState(Vector3Int cellPos)
+    {
         crackStates.Remove(cellPos);
 
         if (crackVisuals.TryGetValue(cellPos, out SpriteRenderer visual) && visual != null){
@@ -299,19 +285,29 @@ public class BlockInteraction : MonoBehaviour
         }
     }
 
-    private void UpdateBreakHealing(){
-        if (crackStates.Count == 0) return;
+    private void UpdateBreakHealing()
+    {
+        if (crackStates.Count == 0){
+            return;
+        }
 
-        List<Vector3Int> cellsToRemove = null;
-        List<Vector3Int> cells = new List<Vector3Int>(crackStates.Keys);
+        crackCellBuffer.Clear();
+        foreach (Vector3Int cellPos in crackStates.Keys){
+            crackCellBuffer.Add(cellPos);
+        }
 
-        foreach (Vector3Int cellPos in cells){
+        removalBuffer.Clear();
+
+        foreach (Vector3Int cellPos in crackCellBuffer){
             CrackState state = crackStates[cellPos];
-
-            if (state.isBeingBroken || state.progress <= 0f) continue;
+            if (state.isBeingBroken || state.progress <= 0f){
+                continue;
+            }
 
             int stage = GetCurrentCrackStage(state.progress);
-            if (stage < 0) continue;
+            if (stage < 0){
+                continue;
+            }
 
             if (stage != state.healStage){
                 state.healStage = stage;
@@ -319,7 +315,9 @@ public class BlockInteraction : MonoBehaviour
             }
 
             float healTime = GetHealTimeForCrackStage(stage);
-            if (healTime <= 0f) continue;
+            if (healTime <= 0f){
+                continue;
+            }
 
             state.healTimer += Time.deltaTime;
             if (state.healTimer < healTime){
@@ -328,8 +326,8 @@ public class BlockInteraction : MonoBehaviour
             }
 
             state.healTimer = 0f;
-
             int nextStage = stage - 1;
+
             if (nextStage >= 0){
                 state.progress = GetProgressForCrackStage(nextStage);
                 state.healStage = nextStage;
@@ -338,103 +336,159 @@ public class BlockInteraction : MonoBehaviour
                 continue;
             }
 
-            if (cellsToRemove == null) cellsToRemove = new List<Vector3Int>();
-            cellsToRemove.Add(cellPos);
+            removalBuffer.Add(cellPos);
         }
 
-        if (cellsToRemove == null) return;
-
-        foreach (Vector3Int cellPos in cellsToRemove){
+        foreach (Vector3Int cellPos in removalBuffer){
             RemoveCrackState(cellPos);
         }
     }
 
-    private int GetCurrentCrackStage(float progress){
+    private int GetCurrentCrackStage(float progress)
+    {
         int stageCount = GetCrackStageCount();
-        if (stageCount <= 0) return -1;
+        if (stageCount <= 0){
+            return -1;
+        }
 
         int stage = Mathf.FloorToInt(progress * stageCount);
         return Mathf.Clamp(stage, 0, stageCount - 1);
     }
 
-    private float GetHealTimeForCrackStage(int stage){ return (stage + 1) * HealSecondsPerCrackStage; }
+    private float GetHealTimeForCrackStage(int stage)
+    {
+        return (stage + 1) * HealSecondsPerCrackStage;
+    }
 
-    private float GetProgressForCrackStage(int stage){
+    private float GetProgressForCrackStage(int stage)
+    {
         int stageCount = GetCrackStageCount();
-        if (stageCount <= 0) return 0f;
+        if (stageCount <= 0){
+            return 0f;
+        }
 
         float step = 1f / stageCount;
-        float progress = (stage + 0.5f) * step;
-        return Mathf.Clamp(progress, 0.001f, 0.999f);
+        return Mathf.Clamp((stage + 0.5f) * step, 0.001f, 0.999f);
     }
 
-    private int GetCrackStageCount(){
-        if (crackSprites == null || crackSprites.Length == 0) return 0;
-        return crackSprites.Length;
+    private int GetCrackStageCount()
+    {
+        return crackSprites == null ? 0 : crackSprites.Length;
     }
 
-    private void ResetPlace(bool clearCell = true){
-        if (clearCell){
-            placeCell = Vector3Int.zero;
-            lastPlaceCell = Vector3Int.zero;
+    private bool IsPointerOverBlockingUI()
+    {
+        if (EventSystem.current == null){
+            return false;
         }
-    }
-
-    private bool IsPointerOverBlockingUIForPlacement(){
-        if (EventSystem.current == null) return false;
 
         Vector2 screenPos = GetPointerScreenPosition();
+        if (IsPointerInsideInventoryRegions(screenPos)){
+            return true;
+        }
 
-        if (IsPointerInsideInventoryRegions(screenPos)) return true;
-
-        PointerEventData eventData = new PointerEventData(EventSystem.current){ position = screenPos };
+        PointerEventData eventData = new(EventSystem.current) { position = screenPos };
         uiRaycastResults.Clear();
         EventSystem.current.RaycastAll(eventData, uiRaycastResults);
 
         foreach (RaycastResult result in uiRaycastResults){
             GameObject hitObject = result.gameObject;
-            if (hitObject == null) continue;
+            if (hitObject == null){
+                continue;
+            }
 
-            if (hitObject.GetComponentInParent<Selectable>() != null) return true;
-            if (hitObject.GetComponentInParent<InventoryDragHandle>() != null) return true;
+            if (hitObject.GetComponentInParent<Selectable>() != null){
+                return true;
+            }
+
+            if (hitObject.GetComponentInParent<InventoryDragHandle>() != null){
+                return true;
+            }
         }
 
         return false;
     }
 
-    private bool IsPointerInsideInventoryRegions(Vector2 screenPos){
-        if (inventory == null) return false;
+    private bool IsPointerInsideInventoryRegions(Vector2 screenPos)
+    {
+        if (inventory == null){
+            return false;
+        }
 
-        // Block placement over inventory layout regions even if decorative graphics don't raycast.
         if (IsPointerInsideRect(inventory.hotbarParent, screenPos)) return true;
         if (IsPointerInsideRect(inventory.mainGridParent, screenPos)) return true;
-
         if (inventory.hotbarParent != null && IsPointerInsideRect(inventory.hotbarParent.parent, screenPos)) return true;
         if (inventory.mainGridParent != null && IsPointerInsideRect(inventory.mainGridParent.parent, screenPos)) return true;
 
         return false;
     }
 
-    private Vector2 GetPointerScreenPosition(){
-        if (Input.touchCount > 0) return Input.GetTouch(0).position;
+    private Vector2 GetPointerScreenPosition()
+    {
+        if (Input.touchCount > 0){
+            return Input.GetTouch(0).position;
+        }
+
         return Input.mousePosition;
     }
 
-    private bool IsPointerInsideRect(Transform target, Vector2 screenPos){
-        if (target == null) return false;
-
-        RectTransform rect = target as RectTransform;
-        if (rect == null) return false;
+    private bool IsPointerInsideRect(Transform target, Vector2 screenPos)
+    {
+        if (target is not RectTransform rect){
+            return false;
+        }
 
         return RectTransformUtility.RectangleContainsScreenPoint(rect, screenPos, null);
     }
 
-    private float GetBreakTime(TileBase tile){
-        if (hardnessTable.TryGetValue(tile.name, out float time)) return time;
-        return defaultBreakTime;
+    private float GetBreakTime(TileBase tile)
+    {
+        if (tile != null && hardnessTable.TryGetValue(tile.name, out float breakTime)){
+            return Mathf.Max(MinimumBreakTime, breakTime);
+        }
+
+        return Mathf.Max(MinimumBreakTime, defaultBreakTime);
     }
 
-    private void OnDrawGizmosSelected(){
+    private void CachePlayerColliders()
+    {
+        playerColliders.Clear();
+
+        Collider2D[] colliders = GetComponentsInChildren<Collider2D>();
+        foreach (Collider2D collider in colliders){
+            if (collider == null || !collider.enabled || collider.isTrigger){
+                continue;
+            }
+
+            playerColliders.Add(collider);
+        }
+    }
+
+    private bool WouldPlaceInsidePlayer(Vector3Int cellPos)
+    {
+        if (playerColliders.Count == 0 || groundTilemap == null){
+            return false;
+        }
+
+        Vector3 center = groundTilemap.GetCellCenterWorld(cellPos);
+        Vector3 size3D = Vector3.Scale(groundTilemap.layoutGrid.cellSize, groundTilemap.layoutGrid.transform.lossyScale);
+        Bounds cellBounds = new(center, new Vector3(Mathf.Abs(size3D.x), Mathf.Abs(size3D.y), 1f));
+
+        foreach (Collider2D collider in playerColliders){
+            if (collider == null || !collider.enabled || collider.isTrigger){
+                continue;
+            }
+
+            if (collider.bounds.Intersects(cellBounds)){
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void OnDrawGizmosSelected()
+    {
         Gizmos.color = Color.yellow;
         Gizmos.DrawWireSphere(transform.position, reachDistance);
     }

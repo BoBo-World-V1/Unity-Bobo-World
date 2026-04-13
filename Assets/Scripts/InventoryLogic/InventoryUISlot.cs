@@ -1,6 +1,6 @@
+using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
-using TMPro;
 
 public class InventoryUISlot : MonoBehaviour
 {
@@ -8,78 +8,94 @@ public class InventoryUISlot : MonoBehaviour
     public Image iconImage;
     public TextMeshProUGUI countText;
     public Image highlightImage;
-    public Image lockOverlay;            // Optional: dim overlay for fist slot
+    public Image lockOverlay;
 
     private Inventory inventory;
     private bool isFistSlot;
 
-    public void Initialize(int index, Inventory inv){
+    public void Initialize(int index, Inventory inv)
+    {
         slotIndex = index;
         inventory = inv;
 
         ConfigureRaycastTargets();
 
-        Button btn = GetComponent<Button>();
-        if (btn != null) btn.onClick.AddListener(OnSlotClicked);
+        Button button = GetComponent<Button>();
+        if (button != null){
+            button.onClick.AddListener(OnSlotClicked);
+        }
 
         ClearSlot();
     }
 
-    public void SetFistSlot(bool locked){
+    public void SetFistSlot(bool locked)
+    {
         isFistSlot = locked;
 
-        // Show lock tint on fist slot so player knows it's permanent
         if (lockOverlay != null){
             lockOverlay.enabled = locked;
             lockOverlay.raycastTarget = false;
         }
-        
     }
 
-    void OnSlotClicked() { inventory.SelectSlot(slotIndex); }
-
-    public void UpdateSlot(InventorySlot slot){
+    public void UpdateSlot(InventorySlot slot)
+    {
         if (slot != null && slot.count > 0){
             SetIcon(slot.icon);
-
-            // Hide count for fist slot
-            if (!isFistSlot) SetCount(slot.count.ToString(), true);
-            
-            else SetCount(string.Empty, false);
-            
+            SetCount(isFistSlot ? string.Empty : slot.count.ToString(), !isFistSlot);
+            return;
         }
-        else ClearSlot();
-        
+
+        ClearSlot();
     }
 
-    public void ClearSlot(){
-        // Never clear fist slot visually
-        if (isFistSlot) return;
+    public void ClearSlot()
+    {
+        if (isFistSlot){
+            SetCount(string.Empty, false);
+            return;
+        }
 
         SetIcon(null, false);
         SetCount(string.Empty, false);
     }
 
-    public void SetHighlight(bool highlighted){
-        if (highlightImage != null) highlightImage.enabled = highlighted;
-        
+    public void SetHighlight(bool highlighted)
+    {
+        if (highlightImage != null){
+            highlightImage.enabled = highlighted;
+        }
     }
 
-    private void SetIcon(Sprite sprite, bool enabled = true){
-        if (iconImage == null) return;
+    private void OnSlotClicked()
+    {
+        if (inventory != null){
+            inventory.SelectSlot(slotIndex);
+        }
+    }
+
+    private void SetIcon(Sprite sprite, bool enabled = true)
+    {
+        if (iconImage == null){
+            return;
+        }
 
         iconImage.sprite = sprite;
         iconImage.enabled = enabled;
     }
 
-    private void SetCount(string text, bool enabled){
-        if (countText == null) return;
+    private void SetCount(string text, bool enabled)
+    {
+        if (countText == null){
+            return;
+        }
 
         countText.text = text;
         countText.enabled = enabled;
     }
 
-    private void ConfigureRaycastTargets(){
+    private void ConfigureRaycastTargets()
+    {
         if (iconImage != null) iconImage.raycastTarget = false;
         if (highlightImage != null) highlightImage.raycastTarget = false;
         if (lockOverlay != null) lockOverlay.raycastTarget = false;
