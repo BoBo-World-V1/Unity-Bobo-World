@@ -77,17 +77,6 @@ public class ItemRegistry : ScriptableObject
         }
     }
 
-    public void ApplyRuntimeDefaults(Sprite fistIcon, Sprite stonePickaxeIcon)
-    {
-        if (TryGetItem(RuntimeItemCatalog.FistItemId, out ItemDefinition fistItem)){
-            fistItem.UpdateIcon(fistIcon);
-        }
-
-        if (TryGetItem(RuntimeItemCatalog.StonePickaxeItemId, out ItemDefinition stonePickaxeItem) && stonePickaxeIcon != null){
-            stonePickaxeItem.UpdateIcon(stonePickaxeIcon);
-        }
-    }
-
     public bool TryGetItem(string itemId, out ItemDefinition item)
     {
         if (itemsById.Count == 0){

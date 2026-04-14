@@ -1,14 +1,15 @@
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
+using UnityEngine.EventSystems;
+using UnityEngine.InputSystem;
 using UnityEngine.Tilemaps;
 using UnityEngine.UI;
 
 public class Inventory : MonoBehaviour
 {
-    private const string DirtLegacyName = "DirtTile";
-    private const int StonePickaxeCraftCost = 10;
-    private const float StonePickaxeBreakMultiplier = 3f;
+    private const string StonePickaxeRecipeId = "recipe.stone_pickaxe";
+    private const float TriggerPressThreshold = 0.5f;
 
     [Header("Inventory Settings")]
     public int hotbarSlots = 4;
@@ -17,7 +18,6 @@ public class Inventory : MonoBehaviour
 
     [Header("Core Item Icons")]
     public Sprite fistIcon;
-    public Sprite stonePickaxeIcon;
 
     [Header("Data")]
     public ItemRegistry itemRegistry;
@@ -36,10 +36,11 @@ public class Inventory : MonoBehaviour
     private readonly List<InventorySlot> slots = new();
     private readonly List<InventoryUISlot> uiSlots = new();
     private readonly Dictionary<int, InventoryUISlot> uiSlotLookup = new();
+    private readonly List<RaycastResult> controllerUiRaycastResults = new();
+    private InventoryDragHandle activeControllerDragHandle;
+    private bool wasControllerPrimaryHeld;
 
     private int TotalSlots => hotbarSlots + mainGridSlots;
-    private string DirtItemId => RuntimeItemCatalog.GetBlockItemId(DirtLegacyName);
-
     public ItemDefinition SelectedItemDefinition => GetSelectedSlot()?.Item;
     public bool IsFistSelected => SelectedItemDefinition != null && SelectedItemDefinition.Category == ItemCategory.Fist;
     public bool IsSelectedPlaceableBlock => GetSelectedSlot()?.IsPlaceableBlock == true;
@@ -62,6 +63,8 @@ public class Inventory : MonoBehaviour
     {
         HandleHotbarInput();
         HandleScrollInput();
+        HandleControllerHotbarInput();
+        HandleControllerPrimaryClick();
     }
 
     private void OnDestroy()
@@ -89,7 +92,7 @@ public class Inventory : MonoBehaviour
             itemRegistry = ItemRegistry.LoadDefault();
         }
 
-        RuntimeItemCatalog.Configure(itemRegistry, fistIcon, stonePickaxeIcon);
+        RuntimeItemCatalog.Configure(itemRegistry);
     }
 
     private void HandleHotbarInput()
@@ -110,6 +113,122 @@ public class Inventory : MonoBehaviour
         else if (scroll < 0f){
             SelectSlot((selectedSlot + 1) % hotbarSlots);
         }
+    }
+
+    private void HandleControllerHotbarInput()
+    {
+        Gamepad gamepad = Gamepad.current;
+        if (gamepad == null || hotbarSlots <= 0){
+            return;
+        }
+
+        if (gamepad.leftShoulder.wasPressedThisFrame){
+            CycleSelectionForward();
+        }
+    }
+
+    private void CycleSelectionForward()
+    {
+        int nextSlot = (selectedSlot + 1) % TotalSlots;
+        SelectSlot(nextSlot);
+    }
+
+    private void HandleControllerPrimaryClick()
+    {
+        Gamepad gamepad = Gamepad.current;
+        if (gamepad == null){
+            activeControllerDragHandle = null;
+            wasControllerPrimaryHeld = false;
+            return;
+        }
+
+        bool primaryHeld = gamepad.leftTrigger.ReadValue() >= TriggerPressThreshold;
+        bool primaryPressed = primaryHeld && !wasControllerPrimaryHeld;
+        bool primaryReleased = wasControllerPrimaryHeld && !primaryHeld;
+
+        if (primaryPressed){
+            BeginControllerUiInteraction();
+        }
+        else if (primaryHeld && activeControllerDragHandle != null){
+            ContinueControllerUiDrag();
+        }
+        else if (primaryReleased){
+            activeControllerDragHandle = null;
+        }
+
+        wasControllerPrimaryHeld = primaryHeld;
+    }
+
+    private void BeginControllerUiInteraction()
+    {
+        if (EventSystem.current == null){
+            return;
+        }
+
+        PointerEventData eventData = CreateControllerPointerEventData();
+        if (eventData == null){
+            return;
+        }
+
+        controllerUiRaycastResults.Clear();
+        EventSystem.current.RaycastAll(eventData, controllerUiRaycastResults);
+
+        for (int i = 0; i < controllerUiRaycastResults.Count; i++){
+            GameObject target = controllerUiRaycastResults[i].gameObject;
+            if (target == null){
+                continue;
+            }
+
+            InventoryDragHandle dragHandle = target.GetComponentInParent<InventoryDragHandle>();
+            if (dragHandle != null){
+                activeControllerDragHandle = dragHandle;
+                dragHandle.OnPointerDown(eventData);
+                EventSystem.current.SetSelectedGameObject(dragHandle.gameObject);
+                return;
+            }
+
+            Button button = target.GetComponentInParent<Button>();
+            if (button != null && button.interactable){
+                button.onClick.Invoke();
+                EventSystem.current.SetSelectedGameObject(button.gameObject);
+                return;
+            }
+        }
+    }
+
+    private void ContinueControllerUiDrag()
+    {
+        if (activeControllerDragHandle == null){
+            return;
+        }
+
+        PointerEventData eventData = CreateControllerPointerEventData();
+        if (eventData == null){
+            return;
+        }
+
+        activeControllerDragHandle.OnDrag(eventData);
+    }
+
+    private PointerEventData CreateControllerPointerEventData()
+    {
+        if (EventSystem.current == null){
+            return null;
+        }
+
+        Vector2 pointerPosition;
+        if (!BlockInteraction.TryGetActiveControllerPointerScreenPosition(out pointerPosition)){
+            pointerPosition = Mouse.current != null
+                ? Mouse.current.position.ReadValue()
+                : (Vector2)Input.mousePosition;
+        }
+
+        return new PointerEventData(EventSystem.current)
+        {
+            position = pointerPosition,
+            pressPosition = pointerPosition,
+            button = PointerEventData.InputButton.Left,
+        };
     }
 
     private void CreateHotbarUI()
@@ -221,7 +340,7 @@ public class Inventory : MonoBehaviour
             legacyBlockName,
             blockTile,
             icon,
-            ResolveDefaultBreakTime(legacyBlockName));
+            0.5f);
         return AddItem(blockDefinition, amount);
     }
 
@@ -491,15 +610,6 @@ public class Inventory : MonoBehaviour
         return false;
     }
 
-    private float ResolveDefaultBreakTime(string legacyBlockName)
-    {
-        return legacyBlockName switch
-        {
-            "StoneTile" => 1.5f,
-            _ => 0.5f,
-        };
-    }
-
     private void OnDropClicked()
     {
         if (selectedSlot == 0){
@@ -531,29 +641,18 @@ public class Inventory : MonoBehaviour
 
     private void OnStoreClicked()
     {
-        if (HasItem(RuntimeItemCatalog.StonePickaxeItemId)){
+        if (!TryGetStonePickaxeRecipe(out CraftingRecipeDefinition recipe)){
+            Debug.Log("Missing Stone Pickaxe recipe or ingredient item definitions.");
+            return;
+        }
+
+        if (recipe.Output != null && HasItem(recipe.Output.ItemId)){
             Debug.Log("Stone Pickaxe already crafted.");
             return;
         }
 
-        if (CountItem(DirtItemId) < StonePickaxeCraftCost){
-            Debug.Log($"Need {StonePickaxeCraftCost} Dirt blocks to craft Stone Pickaxe.");
-            return;
-        }
-
-        if (!TryGetItemDefinition(DirtItemId, out ItemDefinition dirtItem)){
-            Debug.Log("Missing Dirt item definition for crafting.");
-            return;
-        }
-
-        CraftingRecipeDefinition recipe = RuntimeItemCatalog.GetOrCreateStonePickaxeRecipe(
-            dirtItem,
-            stonePickaxeIcon,
-            StonePickaxeCraftCost,
-            StonePickaxeBreakMultiplier);
-
         if (!TryCraftRecipe(recipe, out int craftedSlotIndex)){
-            Debug.Log("Unable to craft Stone Pickaxe.");
+            Debug.Log($"Missing ingredients for {recipe.DisplayName}.");
             return;
         }
 
@@ -573,5 +672,15 @@ public class Inventory : MonoBehaviour
             Debug.Log($"Recycle: {selected.DisplayName}");
             RemoveBlock(selectedSlot, 1);
         }
+    }
+
+    private bool TryGetStonePickaxeRecipe(out CraftingRecipeDefinition recipe)
+    {
+        if (RuntimeItemCatalog.TryGetRecipe(StonePickaxeRecipeId, out recipe)){
+            return true;
+        }
+
+        recipe = null;
+        return false;
     }
 }

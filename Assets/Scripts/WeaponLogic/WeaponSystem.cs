@@ -3,12 +3,14 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
 public class WeaponSystem : MonoBehaviour
 {
     private const float HoverWobbleDegrees = 15f;
     private const float HoverScaleAmplitude = 0.1f;
+    private const float ControllerTriggerPressThreshold = 0.5f;
 
     [SerializeField] private Transform Pivot;
     [SerializeField] private Transform FistSprite;
@@ -52,13 +54,18 @@ public class WeaponSystem : MonoBehaviour
     private readonly List<RaycastResult> uiRaycastResults = new();
 
     private Camera mainCamera;
+    private SpriteRenderer heldSpriteRenderer;
     private TrailRenderer trail;
     private Coroutine animCoroutine;
     private Coroutine returnCoroutine;
     private Material runtimeTrailMaterial;
     private Vector3 idleLocalPosition;
+    private Sprite defaultHeldSprite;
+    private Vector3 externalTargetWorld;
     private float maxRangeSqr;
+    private float externalTargetTimestamp = -10f;
     private bool isHolding;
+    private bool wasControllerAttackHeld;
 
     private void Awake()
     {
@@ -71,6 +78,7 @@ public class WeaponSystem : MonoBehaviour
             return;
         }
 
+        heldSpriteRenderer = FistSprite.GetComponent<SpriteRenderer>();
         CaptureIdleState();
         SetupTrail();
     }
@@ -84,20 +92,32 @@ public class WeaponSystem : MonoBehaviour
 
     private void Update()
     {
+        UpdateHeldSprite();
+
         if (!CanProcessWeaponLogic()){
             StopCurrentAttackIfNeeded();
             ApplyHover();
             return;
         }
 
-        Vector3 pointerWorld = Aim();
-        if (IsPointerOverBlockingUI()){
+        bool mouseAttackPressed = Input.GetMouseButtonDown(0);
+        bool mouseAttackHeld = Input.GetMouseButton(0);
+        bool mouseAttackReleased = Input.GetMouseButtonUp(0);
+        bool controllerAttackHeld = IsControllerAttackHeld();
+        bool controllerAttackPressed = controllerAttackHeld && !wasControllerAttackHeld;
+        bool controllerAttackReleased = wasControllerAttackHeld && !controllerAttackHeld;
+        bool usingPointerInput = mouseAttackPressed || mouseAttackHeld || mouseAttackReleased;
+
+        Vector3 targetWorld = ResolveTargetWorld();
+        if (IsInteractionBlockedByUI(usingPointerInput, controllerAttackPressed || controllerAttackHeld || controllerAttackReleased)){
             StopCurrentAttackIfNeeded();
             ApplyHover();
+            wasControllerAttackHeld = controllerAttackHeld;
             return;
         }
 
-        HandleAttackInput(pointerWorld);
+        HandleAttackInput(targetWorld, mouseAttackPressed, mouseAttackHeld, mouseAttackReleased, controllerAttackPressed, controllerAttackHeld, controllerAttackReleased);
+        wasControllerAttackHeld = controllerAttackHeld;
 
         if (!isHolding){
             ApplyHover();
@@ -112,8 +132,27 @@ public class WeaponSystem : MonoBehaviour
     private void CaptureIdleState()
     {
         idleLocalPosition = FistSprite.localPosition;
+        if (heldSpriteRenderer != null){
+            defaultHeldSprite = heldSpriteRenderer.sprite;
+        }
+
         FistSprite.localScale = Vector3.one;
         FistSprite.gameObject.SetActive(true);
+    }
+
+    private void UpdateHeldSprite()
+    {
+        if (heldSpriteRenderer == null){
+            return;
+        }
+
+        ItemDefinition selectedItem = inventory != null ? inventory.SelectedItemDefinition : null;
+        bool shouldUseSelectedIcon = selectedItem != null
+            && selectedItem.SupportsAttackAnimation
+            && selectedItem.Icon != null
+            && selectedItem.Category != ItemCategory.Fist;
+
+        heldSpriteRenderer.sprite = shouldUseSelectedIcon ? selectedItem.Icon : defaultHeldSprite;
     }
 
     private void SetupTrail()
@@ -162,25 +201,46 @@ public class WeaponSystem : MonoBehaviour
         StopAttack();
     }
 
-    private void HandleAttackInput(Vector3 pointerWorld)
+    public void SetExternalTarget(Vector3 targetWorld)
     {
-        if (Input.GetMouseButtonDown(0)){
+        externalTargetWorld = targetWorld;
+        externalTargetTimestamp = Time.time;
+    }
+
+    private void HandleAttackInput(
+        Vector3 targetWorld,
+        bool mouseAttackPressed,
+        bool mouseAttackHeld,
+        bool mouseAttackReleased,
+        bool controllerAttackPressed,
+        bool controllerAttackHeld,
+        bool controllerAttackReleased)
+    {
+        if (mouseAttackPressed || controllerAttackPressed){
             isHolding = true;
             StopReturnCoroutine();
-            StartAttack(pointerWorld);
+            StartAttack(targetWorld);
         }
-        else if (Input.GetMouseButton(0) && isHolding){
-            MoveToTarget(pointerWorld);
-            RotatePivotTowards(pointerWorld);
+        else if ((mouseAttackHeld || controllerAttackHeld) && isHolding){
+            MoveToTarget(targetWorld);
+            RotatePivotTowards(targetWorld);
         }
-        else if (Input.GetMouseButtonUp(0) && isHolding){
+        else if ((mouseAttackReleased || controllerAttackReleased) && isHolding){
             isHolding = false;
             StopAttack();
         }
     }
 
-    private bool IsPointerOverBlockingUI()
+    private bool IsInteractionBlockedByUI(bool usingPointerInput, bool usingControllerInput)
     {
+        if (usingControllerInput && IsControllerOverBlockingUI()){
+            return true;
+        }
+
+        if (!usingPointerInput){
+            return false;
+        }
+
         Vector2 screenPos = GetPointerScreenPosition();
 
         if (joystickZone != null && RectTransformUtility.RectangleContainsScreenPoint(joystickZone, screenPos, null)){
@@ -192,6 +252,25 @@ public class WeaponSystem : MonoBehaviour
         }
 
         return IsPointerOverInteractiveInventoryUI(screenPos);
+    }
+
+    private bool IsControllerOverBlockingUI()
+    {
+        if (EventSystem.current == null){
+            return false;
+        }
+
+        GameObject selectedObject = EventSystem.current.currentSelectedGameObject;
+        if (selectedObject == null){
+            return false;
+        }
+
+        if (inventoryPanel != null && selectedObject.transform.IsChildOf(inventoryPanel)){
+            return true;
+        }
+
+        return selectedObject.GetComponentInParent<Selectable>() != null
+            || selectedObject.GetComponentInParent<InventoryDragHandle>() != null;
     }
 
     private bool IsPointerOverInteractiveInventoryUI(Vector2 screenPos)
@@ -224,6 +303,10 @@ public class WeaponSystem : MonoBehaviour
 
     private Vector2 GetPointerScreenPosition()
     {
+        if (BlockInteraction.TryGetActiveControllerPointerScreenPosition(out Vector2 controllerPointerPosition)){
+            return controllerPointerPosition;
+        }
+
         if (Application.isMobilePlatform && Input.touchCount > 0){
             return Input.GetTouch(0).position;
         }
@@ -361,5 +444,20 @@ public class WeaponSystem : MonoBehaviour
         Vector3 worldPoint = mainCamera.ScreenToWorldPoint(screenPoint);
         worldPoint.z = 0f;
         return worldPoint;
+    }
+
+    private Vector3 ResolveTargetWorld()
+    {
+        if (Time.time - externalTargetTimestamp <= 0.1f){
+            return externalTargetWorld;
+        }
+
+        return Aim();
+    }
+
+    private bool IsControllerAttackHeld()
+    {
+        Gamepad gamepad = Gamepad.current;
+        return gamepad != null && gamepad.rightTrigger.ReadValue() >= ControllerTriggerPressThreshold;
     }
 }

@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.InputSystem;
 using UnityEngine.Tilemaps;
 using UnityEngine.UI;
 
@@ -8,6 +9,7 @@ public class BlockInteraction : MonoBehaviour
 {
     private const float HealSecondsPerCrackStage = 5f;
     private const float MinimumBreakTime = 0.05f;
+    private const float ControllerTriggerPressThreshold = 0.5f;
 
     private struct CrackState
     {
@@ -26,14 +28,17 @@ public class BlockInteraction : MonoBehaviour
     [Header("Settings")]
     public float reachDistance = 3f;
     public float defaultBreakTime = 0.5f;
+
+    [Header("Controller")]
+    [Range(1000f, 20000f)] public float controllerCursorMoveSpeed = 12000f;
+    [Range(0.01f, 0.5f)] public float controllerAimDeadZone = 0.08f;
+    public Color controllerPointerColor = new(1f, 1f, 1f, 0.9f);
+    public Color controllerTargetColor = new(1f, 0.88f, 0.28f, 0.28f);
+    public Color controllerBlockedTargetColor = new(1f, 0.35f, 0.35f, 0.28f);
+
     [Header("Break Progress Visual")]
     public SpriteRenderer breakOverlay;
     public Sprite[] crackSprites;
-
-    private readonly Dictionary<string, float> hardnessTable = new()
-    {
-        { "DirtTile", 0.5f },
-    };
 
     private readonly Dictionary<Vector3Int, CrackState> crackStates = new();
     private readonly Dictionary<Vector3Int, SpriteRenderer> crackVisuals = new();
@@ -42,13 +47,37 @@ public class BlockInteraction : MonoBehaviour
     private readonly List<Vector3Int> removalBuffer = new();
     private readonly List<Collider2D> playerColliders = new();
 
+    private static Sprite controllerTargetSprite;
+    private static BlockInteraction activeInstance;
+
     private Camera mainCamera;
+    private PlayerInput playerInput;
+    private InputAction lookAction;
     private Vector3Int activeBreakCell;
+    private Vector2 controllerPointerScreenPosition;
+    private Vector2 previousHardwarePointerScreenPosition;
+    private Image controllerPointerImage;
+    private RectTransform controllerPointerRect;
+    private SpriteRenderer controllerTargetRenderer;
     private bool hasActiveBreakCell;
+    private bool hasControllerPointerPosition;
+    private bool useControllerPointer;
+    private bool wasControllerBreakHeld;
+    private bool wasControllerPrimaryHeld;
+
     private void Awake()
     {
+        activeInstance = this;
         mainCamera = Camera.main;
+        playerInput = GetComponent<PlayerInput>();
+        if (playerInput != null){
+            lookAction = playerInput.actions["Look"];
+        }
+
         CachePlayerColliders();
+        EnsureControllerPointerOverlay();
+        EnsureControllerTargetRenderer();
+        previousHardwarePointerScreenPosition = ReadHardwarePointerScreenPosition();
 
         if (breakOverlay != null){
             breakOverlay.gameObject.SetActive(false);
@@ -57,51 +86,83 @@ public class BlockInteraction : MonoBehaviour
 
     private void Update()
     {
+        UpdateControllerCursor();
+        UpdateControllerPointerVisual();
+        UpdateControllerTargetVisual();
         HandlePrimaryInteraction();
         UpdateBreakHealing();
     }
 
     private void HandlePrimaryInteraction()
     {
-        if (!Input.GetMouseButton(0)){
-            if (Input.GetMouseButtonUp(0)){
+        bool controllerPrimaryHeld = IsControllerPrimaryHeld();
+        bool mousePrimaryHeld = Input.GetMouseButton(0) || controllerPrimaryHeld;
+        bool mousePrimaryReleased = Input.GetMouseButtonUp(0) || (wasControllerPrimaryHeld && !controllerPrimaryHeld);
+        bool controllerBreakHeld = IsControllerBreakHeld();
+        bool controllerBreakReleased = wasControllerBreakHeld && !controllerBreakHeld;
+        bool controllerPlacePressed = IsControllerPlacePressed();
+
+        bool wantsBreak = mousePrimaryHeld || controllerBreakHeld;
+        bool releasedBreak = mousePrimaryReleased || controllerBreakReleased;
+
+        if (!wantsBreak && !controllerPlacePressed){
+            if (releasedBreak){
                 StopBreak();
             }
+
+            wasControllerBreakHeld = controllerBreakHeld;
+            wasControllerPrimaryHeld = controllerPrimaryHeld;
             return;
         }
 
-        if (IsPointerOverBlockingUI()){
+        if (IsInteractionBlockedByUI(mousePrimaryHeld, mousePrimaryReleased)){
             StopBreak();
+            wasControllerBreakHeld = controllerBreakHeld;
+            wasControllerPrimaryHeld = controllerPrimaryHeld;
             return;
         }
 
         if (inventory == null || inventory.CanUseSelectedItemForBreaking){
-            TryBreakBlock();
+            if (wantsBreak){
+                TryBreakBlock(true);
+                wasControllerBreakHeld = controllerBreakHeld;
+                wasControllerPrimaryHeld = controllerPrimaryHeld;
+                return;
+            }
+
+            StopBreak();
+            wasControllerBreakHeld = controllerBreakHeld;
+            wasControllerPrimaryHeld = controllerPrimaryHeld;
             return;
         }
 
         if (inventory.IsSelectedPlaceableBlock){
             StopBreak();
-            TryPlaceBlock();
+            if (mousePrimaryHeld || controllerPlacePressed){
+                TryPlaceBlock(true);
+            }
+
+            wasControllerBreakHeld = controllerBreakHeld;
+            wasControllerPrimaryHeld = controllerPrimaryHeld;
             return;
         }
 
         StopBreak();
+        wasControllerBreakHeld = controllerBreakHeld;
+        wasControllerPrimaryHeld = controllerPrimaryHeld;
     }
 
-    private void TryBreakBlock()
+    private void TryBreakBlock(bool usePointerTarget)
     {
         if (groundTilemap == null || fistTransform == null){
             return;
         }
 
-        Vector3 fistPosition = fistTransform.position;
-        if (!IsWithinReach(fistPosition)){
+        if (!TryGetInteractionCell(usePointerTarget, out Vector3Int currentCell, out Vector3 interactionWorld)){
             StopBreak();
             return;
         }
 
-        Vector3Int currentCell = groundTilemap.WorldToCell(fistPosition);
         TileBase tile = groundTilemap.GetTile(currentCell);
         if (tile == null){
             StopBreak();
@@ -118,6 +179,7 @@ public class BlockInteraction : MonoBehaviour
         crackStates[currentCell] = state;
 
         UpdateCrackOverlay(currentCell, state.progress);
+        UpdateWeaponTarget(interactionWorld);
 
         if (state.progress >= 1f){
             BreakBlock(currentCell, tile);
@@ -139,7 +201,7 @@ public class BlockInteraction : MonoBehaviour
         StopBreak();
     }
 
-    private void TryPlaceBlock()
+    private void TryPlaceBlock(bool usePointerTarget)
     {
         if (inventory == null || groundTilemap == null || mainCamera == null){
             return;
@@ -150,12 +212,10 @@ public class BlockInteraction : MonoBehaviour
             return;
         }
 
-        Vector3 pointerWorld = GetPointerWorldPosition();
-        if (!IsWithinReach(pointerWorld)){
+        if (!TryGetInteractionCell(usePointerTarget, out Vector3Int currentCell, out _)){
             return;
         }
 
-        Vector3Int currentCell = groundTilemap.WorldToCell(pointerWorld);
         if (groundTilemap.GetTile(currentCell) != null){
             return;
         }
@@ -186,11 +246,107 @@ public class BlockInteraction : MonoBehaviour
         return Vector2.Distance(transform.position, worldPosition) <= reachDistance;
     }
 
+    private bool TryGetInteractionCell(bool usePointerTarget, out Vector3Int cell, out Vector3 interactionWorld)
+    {
+        if (groundTilemap == null){
+            cell = default;
+            interactionWorld = default;
+            return false;
+        }
+
+        if (!usePointerTarget && TryGetControllerTargetCell(out cell, out interactionWorld)){
+            return true;
+        }
+
+        interactionWorld = GetPointerWorldPosition();
+        if (!IsWithinReach(interactionWorld)){
+            cell = default;
+            return false;
+        }
+
+        cell = groundTilemap.WorldToCell(interactionWorld);
+        return true;
+    }
+
     private Vector3 GetPointerWorldPosition()
     {
         Vector3 pointerWorld = mainCamera.ScreenToWorldPoint(GetPointerScreenPosition());
         pointerWorld.z = 0f;
         return pointerWorld;
+    }
+
+    private bool TryGetControllerTargetCell(out Vector3Int cell, out Vector3 interactionWorld)
+    {
+        if (!HasControllerStyleInput() || groundTilemap == null){
+            cell = default;
+            interactionWorld = default;
+            return false;
+        }
+
+        if (!hasControllerPointerPosition){
+            cell = default;
+            interactionWorld = default;
+            return false;
+        }
+
+        interactionWorld = GetPointerWorldPosition();
+        if (!IsWithinReach(interactionWorld)){
+            cell = default;
+            return false;
+        }
+
+        cell = groundTilemap.WorldToCell(interactionWorld);
+        return true;
+    }
+
+    private void UpdateControllerCursor()
+    {
+        Vector2 hardwarePointer = ReadHardwarePointerScreenPosition();
+        bool hardwarePointerMoved = (hardwarePointer - previousHardwarePointerScreenPosition).sqrMagnitude > 1f;
+
+        if (!HasControllerStyleInput()){
+            useControllerPointer = false;
+            previousHardwarePointerScreenPosition = hardwarePointer;
+            return;
+        }
+
+        EnsureControllerPointerInitialized();
+        Vector2 rawAim = ReadControllerAimInput();
+        bool isUsingControllerAim = rawAim.sqrMagnitude >= controllerAimDeadZone * controllerAimDeadZone;
+
+        if (isUsingControllerAim){
+            useControllerPointer = true;
+            float screenScale = Mathf.Max(1f, Screen.height / 1080f);
+            Vector2 cursorVelocity = rawAim.normalized * (controllerCursorMoveSpeed * screenScale);
+            controllerPointerScreenPosition += cursorVelocity * Time.deltaTime;
+        }
+        else if (hardwarePointerMoved){
+            useControllerPointer = false;
+            controllerPointerScreenPosition = hardwarePointer;
+        }
+
+        controllerPointerScreenPosition.x = Mathf.Clamp(controllerPointerScreenPosition.x, 0f, Screen.width);
+        controllerPointerScreenPosition.y = Mathf.Clamp(controllerPointerScreenPosition.y, 0f, Screen.height);
+        previousHardwarePointerScreenPosition = hardwarePointer;
+        hasControllerPointerPosition = true;
+    }
+
+    private bool IsControllerBreakHeld()
+    {
+        Gamepad gamepad = ReadActiveGamepad();
+        return gamepad != null && gamepad.rightTrigger.ReadValue() >= ControllerTriggerPressThreshold;
+    }
+
+    private bool IsControllerPrimaryHeld()
+    {
+        Gamepad gamepad = ReadActiveGamepad();
+        return gamepad != null && gamepad.leftTrigger.ReadValue() >= ControllerTriggerPressThreshold;
+    }
+
+    private bool IsControllerPlacePressed()
+    {
+        Gamepad gamepad = ReadActiveGamepad();
+        return gamepad != null && gamepad.rightShoulder.wasPressedThisFrame;
     }
 
     private Sprite GetTileSprite(TileBase tile)
@@ -383,8 +539,16 @@ public class BlockInteraction : MonoBehaviour
         return crackSprites == null ? 0 : crackSprites.Length;
     }
 
-    private bool IsPointerOverBlockingUI()
+    private bool IsInteractionBlockedByUI(bool usePointerHeld, bool usePointerReleased)
     {
+        if (IsControllerUIBlockingInteraction()){
+            return true;
+        }
+
+        if (!usePointerHeld && !usePointerReleased){
+            return false;
+        }
+
         if (EventSystem.current == null){
             return false;
         }
@@ -416,6 +580,21 @@ public class BlockInteraction : MonoBehaviour
         return false;
     }
 
+    private bool IsControllerUIBlockingInteraction()
+    {
+        if (EventSystem.current == null){
+            return false;
+        }
+
+        GameObject selectedObject = EventSystem.current.currentSelectedGameObject;
+        if (selectedObject == null){
+            return false;
+        }
+
+        return selectedObject.GetComponentInParent<Selectable>() != null
+            || selectedObject.GetComponentInParent<InventoryDragHandle>() != null;
+    }
+
     private bool IsPointerInsideInventoryRegions(Vector2 screenPos)
     {
         if (inventory == null){
@@ -432,11 +611,79 @@ public class BlockInteraction : MonoBehaviour
 
     private Vector2 GetPointerScreenPosition()
     {
+        if (HasControllerPointerControl()){
+            return controllerPointerScreenPosition;
+        }
+
         if (Input.touchCount > 0){
             return Input.GetTouch(0).position;
         }
 
+        if (Mouse.current != null){
+            return Mouse.current.position.ReadValue();
+        }
+
         return Input.mousePosition;
+    }
+
+    private Vector2 ReadHardwarePointerScreenPosition()
+    {
+        if (Mouse.current != null){
+            return Mouse.current.position.ReadValue();
+        }
+
+        return Input.mousePosition;
+    }
+
+    public static bool TryGetActiveControllerPointerScreenPosition(out Vector2 screenPosition)
+    {
+        if (activeInstance != null && activeInstance.HasControllerPointerControl()){
+            screenPosition = activeInstance.controllerPointerScreenPosition;
+            return true;
+        }
+
+        screenPosition = default;
+        return false;
+    }
+
+    private bool HasControllerPointerControl()
+    {
+        return HasControllerStyleInput() && hasControllerPointerPosition && useControllerPointer;
+    }
+
+    private bool HasControllerStyleInput()
+    {
+        if (playerInput != null && !string.IsNullOrEmpty(playerInput.currentControlScheme)){
+            return playerInput.currentControlScheme != "Keyboard&Mouse"
+                && playerInput.currentControlScheme != "Touch";
+        }
+
+        return Gamepad.current != null || Joystick.current != null;
+    }
+
+    private Gamepad ReadActiveGamepad()
+    {
+        return Gamepad.current;
+    }
+
+    private Vector2 ReadControllerAimInput()
+    {
+        if (lookAction != null && HasControllerStyleInput()){
+            Vector2 actionValue = lookAction.ReadValue<Vector2>();
+            if (actionValue.sqrMagnitude > 0f){
+                return actionValue;
+            }
+        }
+
+        if (Gamepad.current != null){
+            return Gamepad.current.rightStick.ReadValue();
+        }
+
+        if (Joystick.current != null){
+            return Joystick.current.stick.ReadValue();
+        }
+
+        return Vector2.zero;
     }
 
     private bool IsPointerInsideRect(Transform target, Vector2 screenPos)
@@ -451,33 +698,22 @@ public class BlockInteraction : MonoBehaviour
     private float GetBreakTime(TileBase tile)
     {
         if (tile != null){
-            BlockItemDefinition blockDefinition = RuntimeItemCatalog.GetOrCreateBlock(
-                tile.name,
-                tile,
-                GetTileSprite(tile),
-                ResolveBaseBreakTime(tile.name));
+            if (!RuntimeItemCatalog.TryGetBlock(tile, out BlockItemDefinition blockDefinition)){
+                blockDefinition = RuntimeItemCatalog.GetOrCreateBlock(
+                    tile.name,
+                    tile,
+                    GetTileSprite(tile),
+                    defaultBreakTime);
+            }
+
             if (blockDefinition != null){
                 float breakSpeedMultiplierFromInventory = inventory != null ? inventory.SelectedBreakSpeedMultiplier : 1f;
                 return Mathf.Max(MinimumBreakTime, blockDefinition.BreakTime / Mathf.Max(1f, breakSpeedMultiplierFromInventory));
             }
         }
 
-        float baseBreakTime = defaultBreakTime;
-        if (tile != null && hardnessTable.TryGetValue(tile.name, out float breakTime)){
-            baseBreakTime = breakTime;
-        }
-
         float breakSpeedMultiplier = inventory != null ? inventory.SelectedBreakSpeedMultiplier : 1f;
-        return Mathf.Max(MinimumBreakTime, baseBreakTime / Mathf.Max(1f, breakSpeedMultiplier));
-    }
-
-    private float ResolveBaseBreakTime(string blockName)
-    {
-        if (!string.IsNullOrWhiteSpace(blockName) && hardnessTable.TryGetValue(blockName, out float breakTime)){
-            return breakTime;
-        }
-
-        return defaultBreakTime;
+        return Mathf.Max(MinimumBreakTime, defaultBreakTime / Mathf.Max(1f, breakSpeedMultiplier));
     }
 
     private void CachePlayerColliders()
@@ -517,9 +753,152 @@ public class BlockInteraction : MonoBehaviour
         return false;
     }
 
+    private void EnsureControllerTargetRenderer()
+    {
+        if (controllerTargetRenderer != null){
+            return;
+        }
+
+        GameObject targetObject = new("ControllerTarget");
+        targetObject.transform.SetParent(groundTilemap != null ? groundTilemap.transform : null, false);
+
+        controllerTargetRenderer = targetObject.AddComponent<SpriteRenderer>();
+        controllerTargetRenderer.sprite = GetControllerTargetSprite();
+        controllerTargetRenderer.color = controllerTargetColor;
+        controllerTargetRenderer.sortingOrder = breakOverlay != null ? breakOverlay.sortingOrder - 1 : 50;
+        controllerTargetRenderer.enabled = false;
+    }
+
+    private void EnsureControllerPointerOverlay()
+    {
+        if (controllerPointerImage != null && controllerPointerRect != null){
+            return;
+        }
+
+        GameObject canvasObject = new("ControllerPointerCanvas");
+        Canvas canvas = canvasObject.AddComponent<Canvas>();
+        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        canvas.sortingOrder = 5000;
+        canvasObject.AddComponent<GraphicRaycaster>();
+
+        GameObject pointerObject = new("ControllerPointer");
+        pointerObject.transform.SetParent(canvasObject.transform, false);
+
+        controllerPointerRect = pointerObject.AddComponent<RectTransform>();
+        controllerPointerRect.anchorMin = Vector2.zero;
+        controllerPointerRect.anchorMax = Vector2.zero;
+        controllerPointerRect.pivot = new Vector2(0.5f, 0.5f);
+        controllerPointerRect.sizeDelta = new Vector2(18f, 18f);
+
+        controllerPointerImage = pointerObject.AddComponent<Image>();
+        controllerPointerImage.sprite = GetControllerTargetSprite();
+        controllerPointerImage.color = controllerPointerColor;
+        controllerPointerImage.raycastTarget = false;
+        controllerPointerImage.enabled = false;
+    }
+
+    private void UpdateControllerPointerVisual()
+    {
+        if (controllerPointerImage == null || controllerPointerRect == null){
+            return;
+        }
+
+        bool shouldShow = HasControllerPointerControl();
+        if (!shouldShow){
+            controllerPointerImage.enabled = false;
+            return;
+        }
+
+        controllerPointerImage.enabled = true;
+        controllerPointerRect.anchoredPosition = controllerPointerScreenPosition;
+        controllerPointerImage.color = controllerPointerColor;
+    }
+
+    private void UpdateControllerTargetVisual()
+    {
+        if (controllerTargetRenderer == null || groundTilemap == null){
+            return;
+        }
+
+        bool hasTargetCell = TryGetControllerTargetCell(out Vector3Int cell, out _);
+        bool shouldShow = HasControllerStyleInput()
+            && inventory != null
+            && (inventory.CanUseSelectedItemForBreaking || inventory.IsSelectedPlaceableBlock)
+            && hasTargetCell;
+
+        if (!shouldShow){
+            controllerTargetRenderer.enabled = false;
+            return;
+        }
+
+        controllerTargetRenderer.enabled = true;
+        controllerTargetRenderer.transform.position = groundTilemap.GetCellCenterWorld(cell);
+        Vector3 cellSize = groundTilemap.layoutGrid.cellSize;
+        controllerTargetRenderer.transform.localScale = new Vector3(cellSize.x * 0.92f, cellSize.y * 0.92f, 1f);
+
+        bool blocked = inventory.IsSelectedPlaceableBlock
+            && (groundTilemap.GetTile(cell) != null || WouldPlaceInsidePlayer(cell));
+        controllerTargetRenderer.color = blocked ? controllerBlockedTargetColor : controllerTargetColor;
+        UpdateWeaponTarget(groundTilemap.GetCellCenterWorld(cell));
+    }
+
+    private void UpdateWeaponTarget(Vector3 targetWorld)
+    {
+        if (weaponSystem == null){
+            return;
+        }
+
+        weaponSystem.SetExternalTarget(targetWorld);
+    }
+
+    private static Sprite GetControllerTargetSprite()
+    {
+        if (controllerTargetSprite != null){
+            return controllerTargetSprite;
+        }
+
+        Texture2D texture = new(1, 1, TextureFormat.RGBA32, false)
+        {
+            filterMode = FilterMode.Point,
+            wrapMode = TextureWrapMode.Clamp,
+        };
+        texture.SetPixel(0, 0, Color.white);
+        texture.Apply();
+        controllerTargetSprite = Sprite.Create(texture, new Rect(0f, 0f, 1f, 1f), new Vector2(0.5f, 0.5f), 1f);
+        return controllerTargetSprite;
+    }
+
+    private void EnsureControllerPointerInitialized()
+    {
+        if (hasControllerPointerPosition){
+            return;
+        }
+
+        float facingDirection = transform.localScale.x < 0f ? 1f : -1f;
+        Vector3 worldStart = transform.position + new Vector3(facingDirection * Mathf.Min(reachDistance, 1f), 0f, 0f);
+        worldStart.z = 0f;
+        if (mainCamera != null){
+            controllerPointerScreenPosition = mainCamera.WorldToScreenPoint(worldStart);
+        }
+        else{
+            controllerPointerScreenPosition = new Vector2(Screen.width * 0.5f, Screen.height * 0.5f);
+        }
+
+        controllerPointerScreenPosition.x = Mathf.Clamp(controllerPointerScreenPosition.x, 0f, Screen.width);
+        controllerPointerScreenPosition.y = Mathf.Clamp(controllerPointerScreenPosition.y, 0f, Screen.height);
+        hasControllerPointerPosition = true;
+    }
+
     private void OnDrawGizmosSelected()
     {
         Gizmos.color = Color.yellow;
         Gizmos.DrawWireSphere(transform.position, reachDistance);
+    }
+
+    private void OnDestroy()
+    {
+        if (activeInstance == this){
+            activeInstance = null;
+        }
     }
 }

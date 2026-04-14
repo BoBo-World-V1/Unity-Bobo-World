@@ -5,15 +5,13 @@ using UnityEngine.Tilemaps;
 public static class RuntimeItemCatalog
 {
     public const string FistItemId = "core.fist";
-    public const string StonePickaxeItemId = "tool.stone_pickaxe";
-    public const string StonePickaxeRecipeId = "recipe.stone_pickaxe";
 
     private static readonly Dictionary<string, ItemDefinition> itemsById = new();
     private static readonly Dictionary<TileBase, BlockItemDefinition> blocksByTile = new();
     private static readonly Dictionary<string, CraftingRecipeDefinition> recipesById = new();
     private static ItemRegistry itemRegistry;
 
-    public static void Configure(ItemRegistry registry, Sprite fistIcon = null, Sprite stonePickaxeIcon = null)
+    public static void Configure(ItemRegistry registry)
     {
         itemRegistry = registry;
         if (itemRegistry != null){
@@ -109,58 +107,14 @@ public static class RuntimeItemCatalog
         return false;
     }
 
-    public static ToolItemDefinition GetOrCreateStonePickaxe(Sprite icon, float breakSpeedMultiplier)
+    public static bool TryGetRecipe(string recipeId, out CraftingRecipeDefinition recipe)
     {
         ItemRegistry registry = GetRegistry();
-        if (registry != null && registry.TryGetItem(StonePickaxeItemId, out ItemDefinition registeredItem) && registeredItem is ToolItemDefinition registeredTool){
-            return registeredTool;
+        if (registry != null && registry.TryGetRecipe(recipeId, out recipe)){
+            return true;
         }
 
-        if (!itemsById.TryGetValue(StonePickaxeItemId, out ItemDefinition existingItem)){
-            ToolItemDefinition tool = CreateRuntimeDefinition<ToolItemDefinition>();
-            tool.InitializeRuntime(StonePickaxeItemId, "Stone Pickaxe", icon, breakSpeedMultiplier, true);
-            itemsById[StonePickaxeItemId] = tool;
-            return tool;
-        }
-
-        ToolItemDefinition existingTool = existingItem as ToolItemDefinition;
-        existingTool?.UpdateIcon(icon);
-        return existingTool;
-    }
-
-    public static CraftingRecipeDefinition GetOrCreateStonePickaxeRecipe(ItemDefinition dirtItem, Sprite icon, int dirtCost, float breakSpeedMultiplier)
-    {
-        if (dirtItem == null){
-            return null;
-        }
-
-        ItemRegistry registry = GetRegistry();
-        if (registry != null && registry.TryGetRecipe(StonePickaxeRecipeId, out CraftingRecipeDefinition registeredRecipe)){
-            GetOrCreateStonePickaxe(icon, breakSpeedMultiplier);
-            return registeredRecipe;
-        }
-
-        ToolItemDefinition output = GetOrCreateStonePickaxe(icon, breakSpeedMultiplier);
-
-        if (!recipesById.TryGetValue(StonePickaxeRecipeId, out CraftingRecipeDefinition recipe)){
-            recipe = CreateRuntimeDefinition<CraftingRecipeDefinition>();
-            recipe.InitializeRuntime(
-                StonePickaxeRecipeId,
-                "Stone Pickaxe",
-                output,
-                1,
-                new CraftingIngredient(dirtItem.ItemId, dirtCost));
-            recipesById[StonePickaxeRecipeId] = recipe;
-            return recipe;
-        }
-
-        recipe.InitializeRuntime(
-            StonePickaxeRecipeId,
-            "Stone Pickaxe",
-            output,
-            1,
-            new CraftingIngredient(dirtItem.ItemId, dirtCost));
-        return recipe;
+        return recipesById.TryGetValue(recipeId, out recipe);
     }
 
     public static bool TryGetItem(string itemId, out ItemDefinition item)

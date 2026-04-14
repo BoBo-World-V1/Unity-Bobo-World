@@ -14,7 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ToolItemDefinition
   itemId: tool.stone_pickaxe
   displayName: Stone Pickaxe
-  icon: {fileID: 0}
+  icon: {fileID: 5807921338739458136, guid: bae51b409f93c9841b6ccf9808c0553a, type: 3}
   category: 3
   breakSpeedMultiplier: 3
   supportsAttackAnimation: 1

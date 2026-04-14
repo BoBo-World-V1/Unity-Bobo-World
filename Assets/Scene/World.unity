@@ -2118,6 +2118,7 @@ GameObject:
   - component: {fileID: 1119382496}
   - component: {fileID: 1119382497}
   - component: {fileID: 1119382498}
+  - component: {fileID: 1119382499}
   m_Layer: 0
   m_Name: Player
   m_TagString: Player
@@ -2287,12 +2288,17 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PlayerController
   moveSpeed: 5
-  jumpForce: 10
+  jumpForce: 5
   groundCheck: {fileID: 1885665615}
   groundCheckRadius: 0.1
   groundLayer:
     serializedVersion: 2
     m_Bits: 128
+  groundProbeDistance: 0.08
+  groundProbeWidthFactor: 0.9
+  groundedGraceTime: 0.08
+  colliderEdgeRadius: 0.03
+  tileExtrusionFactor: 0.02
   animator: {fileID: 1119382495}
 --- !u!114 &1119382494
 MonoBehaviour:
@@ -2394,6 +2400,11 @@ MonoBehaviour:
   weaponSystem: {fileID: 1119382496}
   reachDistance: 3
   defaultBreakTime: 0.5
+  controllerCursorMoveSpeed: 1000
+  controllerAimDeadZone: 0.35
+  controllerPointerColor: {r: 1, g: 1, b: 1, a: 0.9}
+  controllerTargetColor: {r: 1, g: 0.88, b: 0.28, a: 0.28}
+  controllerBlockedTargetColor: {r: 1, g: 0.35, b: 0.35, a: 0.28}
   breakOverlay: {fileID: 619997158}
   crackSprites:
   - {fileID: 21300000, guid: 0a61e52544c8b2443b7fd5ba8d9b8664, type: 3}
@@ -2415,7 +2426,6 @@ MonoBehaviour:
   mainGridSlots: 32
   selectedSlot: 0
   fistIcon: {fileID: -5191308225362931239, guid: e7c197cf8de2d774582f406e2aeaaa69, type: 3}
-  stonePickaxeIcon: {fileID: 5807921338739458136, guid: bae51b409f93c9841b6ccf9808c0553a, type: 3}
   itemRegistry: {fileID: 0}
   hotbarParent: {fileID: 1247182758}
   mainGridParent: {fileID: 946576379}
@@ -2424,6 +2434,39 @@ MonoBehaviour:
   infoButton: {fileID: 1772174640}
   storeButton: {fileID: 1299517579}
   recycleButton: {fileID: 1792575776}
+--- !u!114 &1119382499
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1119382487}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a21acbf3039741838f0a7044ea6fcd08, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::WorldEnvironmentController
+  fullDayDurationSeconds: 30
+  startTimeOfDay: 0
+  dawnSkyColor: {r: 0.97, g: 0.67, b: 0.49, a: 1}
+  daySkyColor: {r: 0.52, g: 0.81, b: 0.98, a: 1}
+  duskSkyColor: {r: 0.96, g: 0.49, b: 0.34, a: 1}
+  nightSkyColor: {r: 0.07, g: 0.11, b: 0.22, a: 1}
+  dawnBackgroundTint: {r: 1, g: 0.9, b: 0.82, a: 1}
+  dayBackgroundTint: {r: 1, g: 1, b: 1, a: 1}
+  duskBackgroundTint: {r: 0.9, g: 0.76, b: 0.7, a: 1}
+  nightBackgroundTint: {r: 0.38, g: 0.45, b: 0.62, a: 1}
+  weatherDurationMin: 10
+  weatherDurationMax: 10
+  rainChance: 0.35
+  stormChance: 0.15
+  snowChance: 0.15
+  rainSkyTint: {r: 0.72, g: 0.8, b: 0.9, a: 1}
+  stormSkyTint: {r: 0.38, g: 0.47, b: 0.62, a: 1}
+  snowSkyTint: {r: 0.93, g: 0.96, b: 1, a: 1}
+  rainBackgroundTint: {r: 0.86, g: 0.91, b: 0.97, a: 1}
+  stormBackgroundTint: {r: 0.56, g: 0.64, b: 0.78, a: 1}
+  snowBackgroundTint: {r: 0.97, g: 0.98, b: 1, a: 1}
 --- !u!1 &1137711049
 GameObject:
   m_ObjectHideFlags: 0
